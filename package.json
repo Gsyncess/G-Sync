@@ -1,0 +1,56 @@
+{
+  "name": "g-sync",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run smartcharts:assets && tsx server.ts",
+    "build": "npm run smartcharts:assets && next build",
+    "start": "NODE_ENV=production tsx server.ts",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0",
+    "heroku-postbuild": "npm run build",
+    "smartcharts:assets": "node scripts/copy-smartcharts-assets.mjs",
+    "android:add": "cap add android",
+    "android:sync": "cap sync android",
+    "android:open": "cap open android"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@deriv-com/smartcharts-champion": "^2.2.0",
+    "@supabase/supabase-js": "^2.49.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.7.2",
+    "framer-motion": "^12.6.2",
+    "helmet": "^8.3.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.2.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "tailwind-merge": "^3.0.2",
+    "tsx": "^4.19.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.10",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.5.28",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.2"
+  },
+  "overrides": {
+    "postcss": "$postcss"
+  }
+}

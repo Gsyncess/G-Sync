@@ -1,0 +1,121 @@
+"use client";
+
+import {
+  Activity,
+  Bot,
+  CircleHelp,
+  Clock3,
+  Home,
+  LogOut,
+  Settings2,
+  ShieldCheck,
+} from "lucide-react";
+import { DerivSmartChart } from "@/components/deriv-smartchart";
+
+type DashboardHomeProps = {
+  email: string;
+  socketOnline: boolean;
+  onSignOut: () => void;
+};
+
+export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeProps) {
+  return (
+    <main className="dashboard-shell">
+      <header className="dashboard-header">
+        <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
+          <span className="dashboard-brand-icon"><Bot size={19} strokeWidth={2.2} /></span>
+          <span>G-Sync<span className="dashboard-brand-dot">.</span></span>
+        </a>
+        <div className="dashboard-header-actions">
+          <span className="dashboard-live-indicator">
+            <span className={socketOnline ? "status-dot status-dot-live" : "status-dot"} />
+            {socketOnline ? "Synced" : "Offline"}
+          </span>
+          <button type="button" className="dashboard-icon-button" onClick={onSignOut} aria-label="Sign out" title="Sign out">
+            <LogOut size={18} />
+          </button>
+        </div>
+      </header>
+
+      <section className="dashboard-content" aria-labelledby="dashboard-title">
+        <div className="dashboard-greeting">
+          <div>
+            <p className="dashboard-eyebrow">TRADING OVERVIEW</p>
+            <h1 id="dashboard-title">Your dashboard</h1>
+            <p className="dashboard-subtitle">{email || "Your G-Sync account"}</p>
+          </div>
+          <span className="market-session"><span className="status-dot status-dot-waiting" /> Market watch</span>
+        </div>
+
+        <section className="market-panel" aria-label="Deriv SmartCharts market chart">
+          <div className="market-toolbar">
+            <div className="market-title-wrap">
+              <div>
+                <h2>Deriv SmartCharts</h2>
+                <p>Live market data · choose a symbol in the chart</p>
+              </div>
+            </div>
+          </div>
+          <DerivSmartChart />
+        </section>
+
+        <section className="performance-panel" aria-label="Trading performance">
+          <div className="performance-heading">
+            <div>
+              <h2>Bot performance</h2>
+              <p>Session summary</p>
+            </div>
+            <button type="button" className="help-button" aria-label="Performance help" title="Performance updates after your Deriv account is connected">
+              <CircleHelp size={17} />
+            </button>
+          </div>
+          <div className="performance-metrics">
+            <div className="performance-metric">
+              <span>P/L</span>
+              <strong>--</strong>
+            </div>
+            <div className="performance-metric">
+              <span>W</span>
+              <strong>--</strong>
+            </div>
+            <div className="performance-metric">
+              <span>L</span>
+              <strong>--</strong>
+            </div>
+            <div className="performance-metric performance-rate">
+              <span>Rate</span>
+              <div className="rate-ring" aria-label="Win rate not available">
+                <span>--</span>
+              </div>
+            </div>
+          </div>
+          <div className="account-connect-row">
+            <ShieldCheck size={15} />
+            <span>Connect a Deriv account to load verified results</span>
+          </div>
+        </section>
+
+        <div className="bot-controls" aria-label="Bot controls">
+          <button type="button" className="bot-start-button" disabled title="Connect and authorize a Deriv account first">Start bot</button>
+          <button type="button" className="bot-stop-button" disabled title="No bot session is running">Stop</button>
+        </div>
+        <p className="dashboard-disclaimer">Trading controls unlock after account authorization and strategy setup.</p>
+      </section>
+
+      <nav className="dashboard-bottom-nav" aria-label="Main navigation">
+        <button type="button" className="bottom-nav-item bottom-nav-active" aria-current="page">
+          <Home size={19} /><span>Home</span>
+        </button>
+        <button type="button" className="bottom-nav-item" disabled aria-label="Signals coming soon">
+          <Activity size={19} /><span>Signals</span>
+        </button>
+        <button type="button" className="bottom-nav-item" disabled aria-label="History coming soon">
+          <Clock3 size={19} /><span>History</span>
+        </button>
+        <button type="button" className="bottom-nav-item" disabled aria-label="Settings coming soon">
+          <Settings2 size={19} /><span>Settings</span>
+        </button>
+      </nav>
+    </main>
+  );
+}
