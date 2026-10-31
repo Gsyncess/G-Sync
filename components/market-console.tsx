@@ -40,7 +40,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
   const nextIdRef = useRef(0);
   const isBotRunningRef = useRef(isBotRunning);
   isBotRunningRef.current = isBotRunning;
-  const logEntryRef = useRef<((message: string, level?: ConsoleEntry["level"], time?: Date) => void) | null>(null);
   const recentEntryRef = useRef<{ key: string; timestamp: number } | null>(null);
   const breakoutRef = useRef<BreakoutState>({
     prices: [],
@@ -65,7 +64,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       };
       setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
-    logEntryRef.current = appendEntry;
 
     const transport = new DerivMarketTransport(
       (status) => {
@@ -139,14 +137,25 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
 
     return () => {
       active = false;
-      logEntryRef.current = null;
       unsubscribe();
       transport.close();
     };
   }, [onFeedStatus, onMarketSignal]);
 
   useEffect(() => {
-    if (isBotRunning) logEntryRef.current?.("Bot started · scanning market");
+    if (!isBotRunning) return;
+    const message = "Bot started · scanning for breakouts";
+    const key = `info:${message}`;
+    const now = Date.now();
+    if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 1000) return;
+    recentEntryRef.current = { key, timestamp: now };
+    const entry: ConsoleEntry = {
+      id: nextIdRef.current++,
+      time: new Date(now).toLocaleTimeString(),
+      message,
+      level: "info",
+    };
+    setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
   }, [isBotRunning]);
 
   useEffect(() => {
