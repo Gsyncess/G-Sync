@@ -53,15 +53,15 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setDerivConnected(result.connected === true);
       const accounts = result.accounts ?? [];
       setDerivAccounts(accounts);
-      const saved = window.sessionStorage.getItem("deriv-account-id");
+      const saved = window.localStorage.getItem("deriv-account-id");
       const nextId = accounts.some((account) => account.accountId === saved)
         ? saved!
         : accounts.find((account) => account.accountType === "demo")?.accountId
           ?? accounts[0]?.accountId
           ?? "";
       setSelectedDerivAccountId(nextId);
-      if (nextId) window.sessionStorage.setItem("deriv-account-id", nextId);
-      else window.sessionStorage.removeItem("deriv-account-id");
+      if (nextId) window.localStorage.setItem("deriv-account-id", nextId);
+      else window.localStorage.removeItem("deriv-account-id");
       if (result.warning) setDerivMessage(result.warning);
       if (result.expired) setDerivMessage("Your Deriv authorization expired. Please connect again.");
     } catch (error) {
@@ -139,7 +139,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setDerivAccounts([]);
       setSelectedDerivAccountId("");
       setDerivMenuOpen(false);
-      window.sessionStorage.removeItem("deriv-account-id");
+      window.localStorage.removeItem("deriv-account-id");
       setDerivMessage("Your Deriv account has been disconnected.");
     } catch (error) {
       setDerivMessage(error instanceof Error ? error.message : "Could not disconnect the Deriv account.");
@@ -173,7 +173,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   };
   const selectDerivAccount = (account: DerivAccount) => {
     setSelectedDerivAccountId(account.accountId);
-    window.sessionStorage.setItem("deriv-account-id", account.accountId);
+    window.localStorage.setItem("deriv-account-id", account.accountId);
     setDerivMenuOpen(false);
   };
 

@@ -49,6 +49,12 @@ const securityHeaders = {
 
 const oauthCookiePath = "/api/deriv/oauth/";
 const derivCookiePath = "/api/deriv";
+const derivSessionStore = new Map<string, {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  accountId: string | null;
+}>();
 
 function appendCookie(
   response: express.Response,
@@ -92,6 +98,144 @@ function readCookie(request: express.Request, name: string) {
 function readEncodedCookie(request: express.Request, name: string) {
   const value = readCookie(request, name);
   return value ? Buffer.from(value, "base64url").toString("utf8") : null;
+}
+
+function saveDerivSession(sessionKey: string, payload: { accessToken: string; refreshToken?: string; expiresIn?: number; accountId?: string | null }) {
+  const expiresInMs = Number.isFinite(payload.expiresIn) && payload.expiresIn! > 0
+    ? payload.expiresIn! * 1000
+    : 60 * 60 * 1000;
+  derivSessionStore.set(sessionKey, {
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken ?? "",
+    expiresAt: Date.now() + expiresInMs,
+    accountId: payload.accountId ?? null,
+  });
+}
+
+async function refreshDerivAccessToken(request: express.Request, response: express.Response) {
+  const refreshToken = readEncodedCookie(request, "deriv_refresh_token");
+  if (!refreshToken) return null;
+
+  try {
+    const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: derivAppId ?? "",
+        refresh_token: refreshToken,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      clearCookie(response, "deriv_access_token", derivCookiePath);
+      clearCookie(response, "deriv_refresh_token", derivCookiePath);
+      derivSessionStore.delete("default");
+      return null;
+    }
+
+    const tokenData = (await tokenResponse.json()) as {
+      access_token?: unknown;
+      refresh_token?: unknown;
+      expires_in?: unknown;
+    };
+    if (typeof tokenData.access_token !== "string") return null;
+
+    const nextExpiresIn = typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+      ? tokenData.expires_in
+      : 3600;
+    const nextRefresh = typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : refreshToken;
+    const encodedAccessToken = Buffer.from(tokenData.access_token).toString("base64url");
+    const encodedRefreshToken = Buffer.from(nextRefresh).toString("base64url");
+    appendCookie(response, "deriv_access_token", encodedAccessToken, derivCookiePath, Math.max(1, Math.floor(nextExpiresIn)));
+    appendCookie(response, "deriv_refresh_token", encodedRefreshToken, derivCookiePath, 30 * 24 * 60 * 60);
+    saveDerivSession("default", {
+      accessToken: tokenData.access_token,
+      refreshToken: nextRefresh,
+      expiresIn: nextExpiresIn,
+    });
+    return tokenData.access_token;
+  } catch (error) {
+    console.error("Could not refresh Deriv token.", error);
+    return null;
+  }
+}
+
+function coerceDerivBalance(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+  return null;
+}
+
+function collectDerivAccountEntries(payload: unknown): Array<Record<string, unknown>> {
+  const results: Array<Record<string, unknown>> = [];
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const nested of value) visit(nested);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const hasAccountId = typeof record.account_id === "string" || typeof record.accountId === "string" || typeof record.loginid === "string";
+    if (hasAccountId) {
+      results.push(record);
+      return;
+    }
+    for (const nested of Object.values(record)) {
+      visit(nested);
+    }
+  };
+  visit(payload);
+  return results;
+}
+
+function normalizeDerivAccounts(payload: unknown) {
+  const records = collectDerivAccountEntries(payload);
+  return records.flatMap((account) => {
+    const accountId =
+      typeof account.account_id === "string"
+        ? account.account_id
+        : typeof account.accountId === "string"
+          ? account.accountId
+          : typeof account.loginid === "string"
+            ? account.loginid
+            : "";
+    const accountType =
+      typeof account.account_type === "string"
+        ? account.account_type
+        : typeof account.accountType === "string"
+          ? account.accountType
+          : typeof account.type === "string"
+            ? account.type
+            : "";
+    const balance = coerceDerivBalance(account.balance);
+    const currency =
+      typeof account.currency === "string" && account.currency.trim() !== ""
+        ? account.currency.toUpperCase()
+        : "";
+    const normalizedAccountType = accountType.toLowerCase();
+    const status = typeof account.status === "string" ? account.status.toLowerCase() : "";
+
+    if (
+      !accountId ||
+      (normalizedAccountType !== "demo" && normalizedAccountType !== "real") ||
+      balance === null ||
+      !currency ||
+      status === "inactive"
+    ) {
+      return [];
+    }
+
+    return [{
+      accountId,
+      accountType: normalizedAccountType,
+      balance,
+      currency,
+    }];
+  });
 }
 
 async function startServer() {
@@ -302,6 +446,7 @@ async function startServer() {
 
       const tokenData = (await tokenResponse.json()) as {
         access_token?: unknown;
+        refresh_token?: unknown;
         expires_in?: unknown;
       };
       if (
@@ -317,13 +462,32 @@ async function startServer() {
       }
 
       clearOauthCookies();
+      const accessToken = tokenData.access_token;
+      const refreshToken = typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : "";
+      const expiresInSeconds = typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+        ? Math.max(1, Math.floor(tokenData.expires_in))
+        : 3600;
       appendCookie(
         response,
         "deriv_access_token",
-        Buffer.from(tokenData.access_token).toString("base64url"),
+        Buffer.from(accessToken).toString("base64url"),
         derivCookiePath,
-        Math.floor(tokenData.expires_in),
+        expiresInSeconds,
       );
+      if (refreshToken) {
+        appendCookie(
+          response,
+          "deriv_refresh_token",
+          Buffer.from(refreshToken).toString("base64url"),
+          derivCookiePath,
+          30 * 24 * 60 * 60,
+        );
+      }
+      saveDerivSession("default", {
+        accessToken,
+        refreshToken,
+        expiresIn: expiresInSeconds,
+      });
       redirectToResult("connected");
     } catch (error) {
       console.error("Deriv OAuth token exchange could not be completed.", error);
@@ -334,59 +498,74 @@ async function startServer() {
 
   app.get("/api/deriv/session", async (request, response) => {
     response.set("Cache-Control", "no-store");
-    const accessToken = readEncodedCookie(request, "deriv_access_token");
+    let accessToken = readEncodedCookie(request, "deriv_access_token");
+    const storedSession = derivSessionStore.get("default");
+    if (!accessToken && storedSession && storedSession.expiresAt > Date.now()) {
+      accessToken = storedSession.accessToken;
+      const encodedToken = Buffer.from(accessToken).toString("base64url");
+      appendCookie(response, "deriv_access_token", encodedToken, derivCookiePath, Math.max(1, Math.floor((storedSession.expiresAt - Date.now()) / 1000)));
+    }
+
+    if (!accessToken) {
+      const refreshedToken = await refreshDerivAccessToken(request, response);
+      accessToken = refreshedToken ?? null;
+    }
+
     if (!accessToken) {
       response.json({ connected: false });
       return;
     }
 
     try {
-      const accountResponse = await fetch("https://api.derivws.com/trading/v1/options/accounts", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (accountResponse.status === 401) {
-        clearCookie(response, "deriv_access_token", derivCookiePath);
-        response.json({ connected: false, expired: true });
-        return;
+      const accountEndpoints = [
+        "https://api.deriv.com/api/v3/accounts",
+        "https://api.derivws.com/trading/v1/options/accounts",
+      ];
+      let accounts: Array<{ accountId: string; accountType: string; balance: number; currency: string }> = [];
+
+      for (const endpoint of accountEndpoints) {
+        try {
+          const accountResponse = await fetch(endpoint, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "application/json",
+            },
+          });
+          if (accountResponse.status === 401) {
+            const refreshedToken = await refreshDerivAccessToken(request, response);
+            if (refreshedToken) {
+              accessToken = refreshedToken;
+              continue;
+            }
+            clearCookie(response, "deriv_access_token", derivCookiePath);
+            clearCookie(response, "deriv_refresh_token", derivCookiePath);
+            derivSessionStore.delete("default");
+            response.json({ connected: false, expired: true });
+            return;
+          }
+          if (!accountResponse.ok) continue;
+
+          const accountPayload = await accountResponse.json().catch(() => null);
+          const normalized = normalizeDerivAccounts(accountPayload);
+          if (normalized.length > 0) {
+            accounts = normalized;
+            break;
+          }
+        } catch (error) {
+          console.warn("Deriv account endpoint failed", { endpoint, error });
+        }
       }
-      if (!accountResponse.ok) {
-        console.error("Deriv account verification failed", { status: accountResponse.status });
-        response.json({
-          connected: true,
-          accounts: [],
-          warning: "Deriv authorization succeeded, but account details could not be loaded.",
-        });
+
+      if (accounts.length > 0) {
+        response.json({ connected: true, accounts });
         return;
       }
 
-      const accountData = (await accountResponse.json()) as {
-        data?: Array<{
-          account_id?: unknown;
-          account_type?: unknown;
-          balance?: unknown;
-          currency?: unknown;
-          status?: unknown;
-        }>;
-      };
-      const accounts = (accountData.data ?? []).flatMap((account) => {
-        if (
-          typeof account.account_id !== "string" ||
-          (account.account_type !== "demo" && account.account_type !== "real") ||
-          typeof account.balance !== "number" ||
-          !Number.isFinite(account.balance) ||
-          typeof account.currency !== "string" ||
-          account.status === "inactive"
-        ) {
-          return [];
-        }
-        return [{
-          accountId: account.account_id,
-          accountType: account.account_type,
-          balance: account.balance,
-          currency: account.currency,
-        }];
+      response.json({
+        connected: true,
+        accounts: [],
+        warning: "Deriv authorization succeeded, but account details could not be loaded.",
       });
-      response.json({ connected: true, accounts });
     } catch (error) {
       console.error("Could not verify the Deriv account connection.", error);
       response.json({
@@ -399,6 +578,8 @@ async function startServer() {
 
   app.post("/api/deriv/session/disconnect", (_request, response) => {
     clearCookie(response, "deriv_access_token", derivCookiePath);
+    clearCookie(response, "deriv_refresh_token", derivCookiePath);
+    derivSessionStore.delete("default");
     response.set("Cache-Control", "no-store");
     response.json({ connected: false });
   });
