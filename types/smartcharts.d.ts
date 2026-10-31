@@ -11,6 +11,18 @@ declare module "@deriv-com/smartcharts-champion" {
       activeSymbols?: unknown[];
       tradingTimes?: Record<string, { isOpen: boolean; openTime: string; closeTime: string }>;
     };
+    drawingToolFloatingMenuPosition?: { x: number; y: number };
+    chartStatusListener?: (isChartReady: boolean) => void;
+    stateChangeListener?: (...args: unknown[]) => void;
+    clearChart?: boolean;
+    enabledNavigationWidget?: boolean;
+    maxTick?: number;
+    onSettingsChange?: (settings: unknown) => void;
+    settings?: {
+      language?: string;
+      isHighestLowestMarkerEnabled?: boolean;
+      theme?: "light" | "dark";
+    };
     feedCall?: { activeSymbols?: boolean; tradingTimes?: boolean };
     getQuotes: (request: import("@/lib/deriv-smartchart-transport").DerivHistoryRequest) => Promise<unknown>;
     subscribeQuotes: (
@@ -20,7 +32,7 @@ declare module "@deriv-com/smartcharts-champion" {
     unsubscribeQuotes: (request: { symbol?: string; ticks_history?: string; granularity?: number }) => void;
     topWidgets?: () => import("react").ReactNode;
     toolbarWidget?: () => import("react").ReactNode;
-    chartControlsWidgets?: () => import("react").ReactNode;
+    chartControlsWidgets?: (() => import("react").ReactNode) | null;
     enabledChartFooter?: boolean;
     isAnimationEnabled?: boolean;
     isVerticalScrollEnabled?: boolean;
