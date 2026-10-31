@@ -22,6 +22,7 @@ type DerivSessionResponse = {
   connected?: boolean;
   expired?: boolean;
   accounts?: DerivAccount[];
+  warning?: string;
   error?: string;
 };
 
@@ -45,6 +46,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       if (!response.ok) throw new Error(result.error ?? "Could not check the Deriv connection.");
       setDerivConnected(result.connected === true);
       setDerivAccounts(result.accounts ?? []);
+      if (result.warning) setDerivMessage(result.warning);
       if (result.expired) setDerivMessage("Your Deriv authorization expired. Please connect again.");
     } catch (error) {
       setDerivMessage(error instanceof Error ? error.message : "Could not check the Deriv connection.");
@@ -62,7 +64,19 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           ? "Your Deriv account is connected."
           : oauthResult === "cancelled"
             ? "Deriv authorization was cancelled."
-            : "Deriv authorization failed. Please try again.",
+            : oauthResult === "state_mismatch"
+              ? "Deriv authorization could not be verified. Start Connect again and finish in the same browser."
+              : oauthResult === "redirect_mismatch"
+                ? "The callback URL does not match the one configured with Deriv. Check DERIV_REDIRECT_URI."
+                : oauthResult === "oauth_not_configured"
+                  ? "Deriv OAuth is not configured on the server."
+                  : oauthResult === "token_exchange_failed"
+                    ? "Deriv approved the login, but token exchange failed. Check the Heroku logs and app ID."
+                    : oauthResult === "callback_invalid"
+                      ? "Deriv returned an incomplete authorization response. Please connect again."
+                      : oauthResult === "token_response_invalid"
+                        ? "Deriv returned an invalid token response. Please try again."
+                        : "Deriv authorization failed. Please try again.",
       );
       url.searchParams.delete("deriv_oauth");
       window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);

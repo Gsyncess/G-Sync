@@ -213,10 +213,13 @@ async function startServer() {
       clearCookie(response, "deriv_oauth_state", oauthCookiePath);
       clearCookie(response, "deriv_pkce_verifier", oauthCookiePath);
     };
+    const redirectToResult = (result: string) => {
+      response.redirect(`/?deriv_oauth=${encodeURIComponent(result)}`);
+    };
     const authorizationError = request.query.error;
     if (typeof authorizationError === "string") {
       clearOauthCookies();
-      response.redirect(`/?deriv_oauth=${authorizationError === "access_denied" ? "cancelled" : "failed"}`);
+      redirectToResult(authorizationError === "access_denied" ? "cancelled" : "authorization_failed");
       return;
     }
 
@@ -231,7 +234,7 @@ async function startServer() {
       !verifier
     ) {
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("callback_invalid");
       return;
     }
 
@@ -239,13 +242,13 @@ async function startServer() {
     const storedState = Buffer.from(expectedState);
     if (actualState.length !== storedState.length || !timingSafeEqual(actualState, storedState)) {
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("state_mismatch");
       return;
     }
 
     if (!derivAppId || !derivRedirectUri) {
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("oauth_not_configured");
       return;
     }
     let redirectUrl: URL;
@@ -253,7 +256,7 @@ async function startServer() {
       redirectUrl = new URL(derivRedirectUri);
     } catch {
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("oauth_not_configured");
       return;
     }
     const requestOrigin = `${request.protocol}://${request.get("host")}`;
@@ -264,7 +267,7 @@ async function startServer() {
       redirectUrl.hash
     ) {
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("redirect_mismatch");
       return;
     }
 
@@ -281,9 +284,19 @@ async function startServer() {
         }),
       });
       if (!tokenResponse.ok) {
-        console.error("Deriv OAuth token exchange failed", { status: tokenResponse.status });
+        const errorBody = await tokenResponse.json().catch(() => null) as {
+          error?: unknown;
+          error_description?: unknown;
+        } | null;
+        console.error("Deriv OAuth token exchange failed", {
+          status: tokenResponse.status,
+          error: typeof errorBody?.error === "string" ? errorBody.error : undefined,
+          description: typeof errorBody?.error_description === "string"
+            ? errorBody.error_description.slice(0, 300)
+            : undefined,
+        });
         clearOauthCookies();
-        response.redirect("/?deriv_oauth=failed");
+        redirectToResult("token_exchange_failed");
         return;
       }
 
@@ -299,7 +312,7 @@ async function startServer() {
       ) {
         console.error("Deriv OAuth token exchange returned an invalid token response.");
         clearOauthCookies();
-        response.redirect("/?deriv_oauth=failed");
+        redirectToResult("token_response_invalid");
         return;
       }
 
@@ -311,11 +324,11 @@ async function startServer() {
         derivCookiePath,
         Math.floor(tokenData.expires_in),
       );
-      response.redirect("/?deriv_oauth=connected");
+      redirectToResult("connected");
     } catch (error) {
       console.error("Deriv OAuth token exchange could not be completed.", error);
       clearOauthCookies();
-      response.redirect("/?deriv_oauth=failed");
+      redirectToResult("token_exchange_failed");
     }
   });
 
@@ -338,7 +351,11 @@ async function startServer() {
       }
       if (!accountResponse.ok) {
         console.error("Deriv account verification failed", { status: accountResponse.status });
-        response.status(502).json({ error: "Could not verify the Deriv account connection." });
+        response.json({
+          connected: true,
+          accounts: [],
+          warning: "Deriv authorization succeeded, but account details could not be loaded.",
+        });
         return;
       }
 
@@ -352,7 +369,11 @@ async function startServer() {
       response.json({ connected: true, accounts });
     } catch (error) {
       console.error("Could not verify the Deriv account connection.", error);
-      response.status(502).json({ error: "Could not verify the Deriv account connection." });
+      response.json({
+        connected: true,
+        accounts: [],
+        warning: "Deriv authorization succeeded, but account details could not be loaded.",
+      });
     }
   });
 
