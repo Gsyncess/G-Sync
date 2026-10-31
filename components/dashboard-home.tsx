@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import DynamicDerivSmartChart from "@/components/deriv-smartchart";
+import { SignalPage, type SignalConfig } from "@/components/signal-page";
 
 type DerivAccount = {
   accountId: string;
@@ -44,7 +45,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
   const [botStatus, setBotStatus] = useState("Ready");
-  const [botConfig, setBotConfig] = useState({
+  const [activeView, setActiveView] = useState<"home" | "signals">("home");
+  const [botConfig, setBotConfig] = useState<SignalConfig>({
     targetProfit: 20,
     targetLoss: 10,
     stakeAmount: 5,
@@ -218,6 +220,18 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     }
   };
 
+  const handleStartBot = () => {
+    if (!derivConnected) return;
+    setBotRunning(true);
+    setBotStatus("Watching market");
+  };
+
+  const handleStopBot = () => {
+    setBotRunning(false);
+    setBotStatus("Ready");
+    botStateRef.current = { price: 100, emaFast: 100, emaSlow: 100, macd: 0, signal: 0, position: "flat", entryPrice: 0 };
+  };
+
   const accountSummary = derivAccounts
     .map(({ accountType, currency }) => [accountType, currency].filter(Boolean).join(" · "))
     .join(", ");
@@ -336,148 +350,94 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       </header>
 
       <section className="dashboard-content" aria-labelledby="dashboard-title">
-        <div className="dashboard-greeting">
-          <div>
-            <p className="dashboard-eyebrow">TRADING OVERVIEW</p>
-            <h1 id="dashboard-title">Your dashboard</h1>
-            <p className="dashboard-subtitle">{email || "Your G-Sync account"}</p>
-          </div>
-          <span className="market-session"><span className="status-dot status-dot-waiting" /> Market watch</span>
-        </div>
-
-        <section className="market-panel" aria-label="Deriv SmartCharts market chart">
-          <div className="market-toolbar">
-            <div className="market-title-wrap">
+        {activeView === "signals" ? (
+          <SignalPage
+            derivConnected={derivConnected}
+            derivBusy={derivBusy}
+            botRunning={botRunning}
+            botStatus={botStatus}
+            botConfig={botConfig}
+            onConfigChange={setBotConfig}
+            onStart={handleStartBot}
+            onStop={handleStopBot}
+            message={derivMessage}
+          />
+        ) : (
+          <>
+            <div className="dashboard-greeting">
               <div>
-                <h2>Deriv SmartCharts</h2>
-                <p>Live market data · Volatility 100 Index</p>
+                <p className="dashboard-eyebrow">TRADING OVERVIEW</p>
+                <h1 id="dashboard-title">Your dashboard</h1>
+                <p className="dashboard-subtitle">{email || "Your G-Sync account"}</p>
               </div>
+              <span className="market-session"><span className="status-dot status-dot-waiting" /> Market watch</span>
             </div>
-          </div>
-          <DynamicDerivSmartChart />
-        </section>
 
-        <section className="performance-panel" aria-label="Trading performance">
-          <div className="performance-heading">
-            <div>
-              <h2>Bot performance</h2>
-              <p>Session summary</p>
-            </div>
-            <button type="button" className="help-button" aria-label="Performance help" title="Performance updates after your Deriv account is connected">
-              <CircleHelp size={17} />
-            </button>
-          </div>
-          <div className="performance-metrics">
-            <div className="performance-metric">
-              <span>P/L</span>
-              <strong>--</strong>
-            </div>
-            <div className="performance-metric">
-              <span>W</span>
-              <strong>--</strong>
-            </div>
-            <div className="performance-metric">
-              <span>L</span>
-              <strong>--</strong>
-            </div>
-            <div className="performance-metric performance-rate">
-              <span>Rate</span>
-              <div className="rate-ring" aria-label="Win rate not available">
-                <span>--</span>
+            <section className="market-panel" aria-label="Deriv SmartCharts market chart">
+              <div className="market-toolbar">
+                <div className="market-title-wrap">
+                  <div>
+                    <h2>Deriv SmartCharts</h2>
+                    <p>Live market data · Volatility 100 Index</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          <div className="account-connect-row">
-            <ShieldCheck size={15} />
-            <div className="account-connect-content">
-              <span>
-                {derivBusy
-                  ? "Checking Deriv connection…"
-                  : derivConnected
-                    ? `Deriv connected${accountSummary ? ` · ${accountSummary}` : ""}`
-                    : "Connect Deriv to authorize your account"}
-              </span>
-              {derivMessage && <span className="deriv-account-message" role="status">{derivMessage}</span>}
-            </div>
-          </div>
-        </section>
+              <DynamicDerivSmartChart />
+            </section>
 
-        <div className="bot-controls" aria-label="Bot controls">
-          <div className="bot-setup-panel" style={{ display: "grid", gap: 12, width: "100%" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
-              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
-                <span>Target profit</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={botConfig.targetProfit}
-                  onChange={(event) => setBotConfig((current) => ({ ...current, targetProfit: Number(event.target.value) || 1 }))}
-                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
-                <span>Target loss</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={botConfig.targetLoss}
-                  onChange={(event) => setBotConfig((current) => ({ ...current, targetLoss: Number(event.target.value) || 1 }))}
-                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
-                <span>Stake amount</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={botConfig.stakeAmount}
-                  onChange={(event) => setBotConfig((current) => ({ ...current, stakeAmount: Number(event.target.value) || 1 }))}
-                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
-                />
-              </label>
-            </div>
-            <div style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: "#93c5fd", fontSize: 12 }}>{botStatus}</span>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  className="bot-start-button"
-                  onClick={() => {
-                    if (!derivConnected) return;
-                    setBotRunning(true);
-                    setBotStatus("Watching market");
-                  }}
-                  disabled={!derivConnected || botRunning}
-                >
-                  Start bot
-                </button>
-                <button
-                  type="button"
-                  className="bot-stop-button"
-                  onClick={() => {
-                    setBotRunning(false);
-                    setBotStatus("Ready");
-                    botStateRef.current = { price: 100, emaFast: 100, emaSlow: 100, macd: 0, signal: 0, position: "flat", entryPrice: 0 };
-                  }}
-                  disabled={!botRunning}
-                >
-                  Stop
+            <section className="performance-panel" aria-label="Trading performance">
+              <div className="performance-heading">
+                <div>
+                  <h2>Bot performance</h2>
+                  <p>Session summary</p>
+                </div>
+                <button type="button" className="help-button" aria-label="Performance help" title="Performance updates after your Deriv account is connected">
+                  <CircleHelp size={17} />
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-        <p className="dashboard-disclaimer">Trading controls unlock after account authorization and setup.</p>
+              <div className="performance-metrics">
+                <div className="performance-metric">
+                  <span>P/L</span>
+                  <strong>--</strong>
+                </div>
+                <div className="performance-metric">
+                  <span>W</span>
+                  <strong>--</strong>
+                </div>
+                <div className="performance-metric">
+                  <span>L</span>
+                  <strong>--</strong>
+                </div>
+                <div className="performance-metric performance-rate">
+                  <span>Rate</span>
+                  <div className="rate-ring" aria-label="Win rate not available">
+                    <span>--</span>
+                  </div>
+                </div>
+              </div>
+              <div className="account-connect-row">
+                <ShieldCheck size={15} />
+                <div className="account-connect-content">
+                  <span>
+                    {derivBusy
+                      ? "Checking Deriv connection…"
+                      : derivConnected
+                        ? `Deriv connected${accountSummary ? ` · ${accountSummary}` : ""}`
+                        : "Connect Deriv to authorize your account"}
+                  </span>
+                  {derivMessage && <span className="deriv-account-message" role="status">{derivMessage}</span>}
+                </div>
+              </div>
+            </section>
+          </>
+        )}
       </section>
 
       <nav className="dashboard-bottom-nav" aria-label="Main navigation">
-        <button type="button" className="bottom-nav-item bottom-nav-active" aria-current="page">
+        <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined}>
           <Home size={19} /><span>Home</span>
         </button>
-        <button type="button" className="bottom-nav-item" disabled aria-label="Signals coming soon">
+        <button type="button" className={`bottom-nav-item ${activeView === "signals" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("signals")} aria-current={activeView === "signals" ? "page" : undefined}>
           <Activity size={19} /><span>Signals</span>
         </button>
         <button type="button" className="bottom-nav-item" disabled aria-label="History coming soon">
