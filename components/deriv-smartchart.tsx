@@ -19,6 +19,7 @@ type MarketChartData = {
 
 type DerivActiveSymbol = {
   exchange_is_open: number;
+  is_trading_suspended: number;
   display_name: string;
   market: string;
   market_display_name: string;
@@ -43,6 +44,7 @@ function normalizeActiveSymbols(symbols: unknown[]): DerivActiveSymbol[] {
     if (typeof item !== "object" || item === null) return [];
     const symbol = item as {
       exchange_is_open?: unknown;
+      is_trading_suspended?: unknown;
       market?: unknown;
       pip_size?: unknown;
       subgroup?: unknown;
@@ -51,30 +53,27 @@ function normalizeActiveSymbols(symbols: unknown[]): DerivActiveSymbol[] {
       underlying_symbol_name?: unknown;
       underlying_symbol_type?: unknown;
     };
-    if (
-      typeof symbol.underlying_symbol !== "string" ||
-      typeof symbol.underlying_symbol_name !== "string" ||
-      typeof symbol.underlying_symbol_type !== "string" ||
-      typeof symbol.market !== "string" ||
-      typeof symbol.subgroup !== "string" ||
-      typeof symbol.submarket !== "string" ||
-      typeof symbol.pip_size !== "number"
-    ) {
-      return [];
-    }
+    if (typeof symbol.underlying_symbol !== "string") return [];
+
+    const market = typeof symbol.market === "string" ? symbol.market : "";
+    const subgroup = typeof symbol.subgroup === "string" ? symbol.subgroup : "";
+    const submarket = typeof symbol.submarket === "string" ? symbol.submarket : "";
 
     return [{
       exchange_is_open: symbol.exchange_is_open === 1 ? 1 : 0,
-      display_name: symbol.underlying_symbol_name,
-      market: symbol.market,
-      market_display_name: displayMarketName(symbol.market),
-      pip: symbol.pip_size,
-      subgroup: symbol.subgroup,
-      subgroup_display_name: displayMarketName(symbol.subgroup),
-      submarket: symbol.submarket,
-      submarket_display_name: displayMarketName(symbol.submarket),
+      is_trading_suspended: symbol.is_trading_suspended === 1 ? 1 : 0,
+      display_name: typeof symbol.underlying_symbol_name === "string"
+        ? symbol.underlying_symbol_name
+        : symbol.underlying_symbol,
+      market,
+      market_display_name: displayMarketName(market),
+      pip: typeof symbol.pip_size === "number" ? symbol.pip_size : 0.01,
+      subgroup,
+      subgroup_display_name: displayMarketName(subgroup),
+      submarket,
+      submarket_display_name: displayMarketName(submarket),
       symbol: symbol.underlying_symbol,
-      symbol_type: symbol.underlying_symbol_type,
+      symbol_type: typeof symbol.underlying_symbol_type === "string" ? symbol.underlying_symbol_type : "",
     }];
   });
 }
@@ -88,7 +87,24 @@ export function DerivSmartChart() {
   const [chartType, setChartType] = useState("mountain");
   const [granularity, setGranularity] = useState<number | undefined>(60);
   const [connectionOpen, setConnectionOpen] = useState(false);
+  const [isReadyToMount, setIsReadyToMount] = useState(false);
   const transportRef = useRef<DerivSmartChartTransport | null>(null);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(
+          registrations
+            .filter((registration) => registration.active?.scriptURL.includes("flutter_service_worker"))
+            .map((registration) => registration.unregister()),
+        ))
+        .catch((error: unknown) => {
+          console.warn("[DerivSmartChart] Could not unregister a stale chart service worker.", error);
+        });
+    }
+
+    setIsReadyToMount(true);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -166,6 +182,15 @@ export function DerivSmartChart() {
           }
         }
         const activeSymbols = normalizeActiveSymbols(symbolsResponse.active_symbols ?? []);
+        for (const activeSymbol of activeSymbols) {
+          if (!tradingTimes[activeSymbol.symbol]) {
+            tradingTimes[activeSymbol.symbol] = {
+              isOpen: activeSymbol.exchange_is_open === 1,
+              openTime: "",
+              closeTime: "",
+            };
+          }
+        }
         setChartData({
           activeSymbols,
           tradingTimes,
@@ -233,7 +258,7 @@ export function DerivSmartChart() {
     );
   }
 
-  if (!sdk || !chartData) {
+  if (!sdk || !chartData || !isReadyToMount) {
     return (
       <div className="smartchart-placeholder" role="status">
         <span className="chart-empty-icon"><Wifi size={19} /></span>
