@@ -144,18 +144,23 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
 
   useEffect(() => {
     if (!isBotRunning) return;
-    const message = "Bot started · scanning for breakouts";
-    const key = `info:${message}`;
-    const now = Date.now();
-    if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 1000) return;
-    recentEntryRef.current = { key, timestamp: now };
-    const entry: ConsoleEntry = {
-      id: nextIdRef.current++,
-      time: new Date(now).toLocaleTimeString(),
-      message,
-      level: "info",
+    const logMarketStatus = () => {
+      const message = `${MARKET_SYMBOL} · bot running · scanning for breakouts`;
+      const key = `info:${message}`;
+      const now = Date.now();
+      if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 900) return;
+      recentEntryRef.current = { key, timestamp: now };
+      const entry: ConsoleEntry = {
+        id: nextIdRef.current++,
+        time: new Date(now).toLocaleTimeString(),
+        message,
+        level: "info",
+      };
+      setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
-    setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
+    logMarketStatus();
+    const intervalId = window.setInterval(logMarketStatus, 1000);
+    return () => window.clearInterval(intervalId);
   }, [isBotRunning]);
 
   useEffect(() => {
