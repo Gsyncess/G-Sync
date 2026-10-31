@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 export type SignalConfig = {
   targetProfit: number;
   targetLoss: number;
@@ -15,19 +17,34 @@ export function SignalPage({
   botConfig,
   onConfigChange,
 }: SignalPageProps) {
-  const updateField = (field: keyof SignalConfig, value: number) => {
-    onConfigChange({
-      ...botConfig,
-      [field]: Number.isFinite(value) && value > 0 ? value : 1,
-    });
+  const [inputValues, setInputValues] = useState<Record<keyof SignalConfig, string>>({
+    targetProfit: String(botConfig.targetProfit),
+    targetLoss: String(botConfig.targetLoss),
+    stakeAmount: String(botConfig.stakeAmount),
+  });
+
+  const updateField = (field: keyof SignalConfig, value: string) => {
+    setInputValues((current) => ({ ...current, [field]: value }));
+    const parsedValue = Number(value);
+    if (value.trim() !== "" && Number.isFinite(parsedValue) && parsedValue > 0) {
+      onConfigChange({ ...botConfig, [field]: parsedValue });
+    }
+  };
+
+  const normalizeField = (field: keyof SignalConfig) => {
+    const parsedValue = Number(inputValues[field]);
+    setInputValues((current) => ({
+      ...current,
+      [field]: String(Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : botConfig[field]),
+    }));
   };
 
   return (
-    <section className="market-panel" aria-label="Signal configuration page">
+    <section className="market-panel" aria-label="Configuration page">
       <div className="market-toolbar">
         <div className="market-title-wrap">
           <div>
-            <h2>Signals</h2>
+            <h2>Configure</h2>
             <p>Set trading limits</p>
           </div>
         </div>
@@ -40,10 +57,11 @@ export function SignalPage({
             <input
               className="signal-config-input"
               type="number"
-              min="1"
-              step="1"
-              value={botConfig.targetProfit}
-              onChange={(event) => updateField("targetProfit", Number(event.target.value))}
+              min="0.01"
+              step="any"
+              value={inputValues.targetProfit}
+              onChange={(event) => updateField("targetProfit", event.target.value)}
+              onBlur={() => normalizeField("targetProfit")}
             />
           </label>
           <label className="signal-config-field">
@@ -51,10 +69,11 @@ export function SignalPage({
             <input
               className="signal-config-input"
               type="number"
-              min="1"
-              step="1"
-              value={botConfig.targetLoss}
-              onChange={(event) => updateField("targetLoss", Number(event.target.value))}
+              min="0.01"
+              step="any"
+              value={inputValues.targetLoss}
+              onChange={(event) => updateField("targetLoss", event.target.value)}
+              onBlur={() => normalizeField("targetLoss")}
             />
           </label>
           <label className="signal-config-field">
@@ -62,10 +81,11 @@ export function SignalPage({
             <input
               className="signal-config-input"
               type="number"
-              min="1"
-              step="1"
-              value={botConfig.stakeAmount}
-              onChange={(event) => updateField("stakeAmount", Number(event.target.value))}
+              min="0.01"
+              step="any"
+              value={inputValues.stakeAmount}
+              onChange={(event) => updateField("stakeAmount", event.target.value)}
+              onBlur={() => normalizeField("stakeAmount")}
             />
           </label>
         </div>
