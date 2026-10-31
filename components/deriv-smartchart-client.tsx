@@ -3,24 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Wifi } from "lucide-react";
 import {
-  ChartMode,
-  ChartTitle,
-  DrawTools,
-  Share,
-  setSmartChartsPublicPath,
-  SmartChart,
-  StudyLegend,
-  ToolbarWidget,
-  Views,
-} from "@deriv-com/smartcharts-champion";
-import {
   DerivSmartChartTransport,
   type DerivHistoryRequest,
   type DerivSubscriptionRequest,
   type SmartChartQuote,
 } from "@/lib/deriv-smartchart-transport";
 
-setSmartChartsPublicPath("/smartcharts/");
+type SmartChartsModule = typeof import("@deriv-com/smartcharts-champion");
 
 type MarketChartData = {
   activeSymbols?: unknown[];
@@ -89,6 +78,7 @@ function normalizeActiveSymbols(symbols: unknown[]): DerivActiveSymbol[] {
 }
 
 export function DerivSmartChart() {
+  const [sdk, setSdk] = useState<SmartChartsModule | null>(null);
   const [chartData, setChartData] = useState<MarketChartData | null>(null);
   const [marketStatus, setMarketStatus] = useState("Connecting");
   const [marketError, setMarketError] = useState("");
@@ -98,6 +88,24 @@ export function DerivSmartChart() {
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [isReadyToMount, setIsReadyToMount] = useState(false);
   const transportRef = useRef<DerivSmartChartTransport | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void import("@deriv-com/smartcharts-champion")
+      .then((module) => {
+        module.setSmartChartsPublicPath("/smartcharts/");
+        if (active) setSdk(module);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setMarketError(error instanceof Error ? error.message : "Could not load Deriv SmartCharts.");
+        setMarketStatus("Unavailable");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -218,20 +226,21 @@ export function DerivSmartChart() {
   );
 
   const renderToolbar = useCallback(() => {
+    if (!sdk) return null;
     return (
-      <ToolbarWidget>
-        <ChartMode onChartType={setChartType} onGranularity={setGranularity} />
-        <StudyLegend />
-        <Views onChartType={setChartType} onGranularity={setGranularity} />
-        <DrawTools />
-        <Share />
-      </ToolbarWidget>
+      <sdk.ToolbarWidget>
+        <sdk.ChartMode onChartType={setChartType} onGranularity={setGranularity} />
+        <sdk.StudyLegend />
+        <sdk.Views onChartType={setChartType} onGranularity={setGranularity} />
+        <sdk.DrawTools />
+        <sdk.Share />
+      </sdk.ToolbarWidget>
     );
-  }, []);
+  }, [sdk]);
 
   const renderTopWidgets = useCallback(
-    () => <ChartTitle onChange={setSymbol} />,
-    [],
+    () => sdk ? <sdk.ChartTitle onChange={setSymbol} /> : null,
+    [sdk],
   );
 
   if (marketError) {
@@ -244,7 +253,7 @@ export function DerivSmartChart() {
     );
   }
 
-  if (!chartData || !isReadyToMount) {
+  if (!sdk || !chartData || !isReadyToMount) {
     return (
       <div className="smartchart-placeholder" role="status">
         <span className="chart-empty-icon"><Wifi size={19} /></span>
@@ -256,7 +265,7 @@ export function DerivSmartChart() {
 
   return (
     <div className="smartchart-instance" aria-label="Deriv SmartCharts live market chart">
-      <SmartChart
+      <sdk.SmartChart
         key={symbol}
         id="gsync-deriv-smartchart"
         symbol={symbol}
