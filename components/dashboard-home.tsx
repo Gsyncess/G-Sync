@@ -12,7 +12,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import DynamicDerivSmartChart from "@/components/deriv-smartchart";
+import { MarketConsole } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
 
 type DerivAccount = {
@@ -366,17 +366,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               <span className="market-session"><span className="status-dot status-dot-waiting" /> Market watch</span>
             </div>
 
-            <section className="market-panel" aria-label="Deriv SmartCharts market chart">
-              <div className="market-toolbar">
-                <div className="market-title-wrap">
-                  <div>
-                    <h2>Deriv SmartCharts</h2>
-                    <p>Live market data · Volatility 100 Index</p>
-                  </div>
-                </div>
-              </div>
-              <DynamicDerivSmartChart />
-            </section>
+            <MarketConsole />
 
             <section className="performance-panel" aria-label="Trading performance">
               <div className="performance-heading">

@@ -1,52 +1,25 @@
-export type DerivHistoryRequest = {
+export type DerivMarketSubscriptionRequest = {
   symbol: string;
-  granularity?: number;
-  count?: number;
-  start?: number;
-  end?: number;
-  style?: string;
 };
 
-export type DerivSubscriptionRequest = {
-  symbol: string;
-  granularity?: number;
-  style?: string;
-};
-
-export type SmartChartQuote = {
+export type DerivMarketQuote = {
   Date: string;
   Close: number;
-  Open?: number;
-  High?: number;
-  Low?: number;
   DT: Date;
   tick?: Record<string, unknown>;
-  ohlc?: Record<string, unknown>;
 };
 
 type DerivResponse = {
   req_id?: number;
   subscription?: { id?: string };
   echo_req?: Record<string, unknown>;
-  candles?: Array<{ open: string; high: string; low: string; close: string; epoch: number }>;
-  history?: { prices: string[]; times: number[] };
   tick?: { quote: number; epoch: number; [key: string]: unknown };
-  ohlc?: {
-    open: string;
-    high: string;
-    low: string;
-    close: string;
-    open_time: number;
-    [key: string]: unknown;
-  };
-  active_symbols?: unknown[];
-  trading_times?: { markets?: Array<Record<string, unknown>> };
   error?: { message?: string };
 };
 
 type Subscription = {
-  request: DerivSubscriptionRequest;
-  callbacks: Set<(quote: SmartChartQuote) => void>;
+  request: DerivMarketSubscriptionRequest;
+  callbacks: Set<(quote: DerivMarketQuote) => void>;
   id?: string;
 };
 
@@ -56,12 +29,12 @@ type PendingRequest = {
   timeout: number;
 };
 
-const subscriptionKey = (request: { symbol?: string; ticks_history?: string; granularity?: number }) =>
-  `${request.symbol ?? request.ticks_history ?? ""}:${request.granularity ?? 0}`;
+const subscriptionKey = (request: { symbol?: string; ticks_history?: string }) =>
+  request.symbol ?? request.ticks_history ?? "";
 
 const DERIV_PUBLIC_WEBSOCKET = "wss://api.derivws.com/trading/v1/options/ws/public";
 
-export class DerivSmartChartTransport {
+export class DerivMarketTransport {
   private socket: WebSocket | null = null;
   private nextRequestId = 1;
   private reconnectDelay = 1000;
@@ -132,7 +105,6 @@ export class DerivSmartChartTransport {
     const key = subscriptionKey({
       symbol: typeof requestEcho.ticks_history === "string" ? requestEcho.ticks_history : undefined,
       ticks_history: typeof requestEcho.ticks_history === "string" ? requestEcho.ticks_history : undefined,
-      granularity: typeof requestEcho.granularity === "number" ? requestEcho.granularity : undefined,
     });
     const subscription = this.subscriptions.get(key);
     if (!subscription) return;
@@ -140,23 +112,11 @@ export class DerivSmartChartTransport {
 
     if (response.tick) {
       const date = new Date(response.tick.epoch * 1000);
-      const quote: SmartChartQuote = {
+      const quote: DerivMarketQuote = {
         Date: date.toISOString(),
         Close: response.tick.quote,
         DT: date,
         tick: response.tick,
-      };
-      subscription.callbacks.forEach((callback) => callback(quote));
-    } else if (response.ohlc) {
-      const date = new Date(response.ohlc.open_time * 1000);
-      const quote: SmartChartQuote = {
-        Date: date.toISOString(),
-        Open: Number(response.ohlc.open),
-        High: Number(response.ohlc.high),
-        Low: Number(response.ohlc.low),
-        Close: Number(response.ohlc.close),
-        DT: date,
-        ohlc: response.ohlc,
       };
       subscription.callbacks.forEach((callback) => callback(quote));
     }
@@ -181,63 +141,24 @@ export class DerivSmartChartTransport {
     });
   }
 
-  async requestAPI(request: Record<string, unknown>) {
-    const response = await this.send(request);
-    if (response.error) throw new Error(response.error.message ?? "Deriv request failed.");
-    return response;
-  }
-
-  async getQuotes(request: DerivHistoryRequest) {
-    const response = await this.requestAPI({
-      ticks_history: request.symbol,
-      style: request.style ?? (request.granularity ? "candles" : "ticks"),
-      count: request.count ?? 500,
-      end: request.end ? String(request.end) : "latest",
-      adjust_start_time: 1,
-      ...(request.granularity ? { granularity: request.granularity } : {}),
-      ...(request.start ? { start: String(request.start) } : {}),
-    });
-
-    return {
-      ...(response.candles
-        ? {
-            candles: response.candles.map((candle) => ({
-              open: Number(candle.open),
-              high: Number(candle.high),
-              low: Number(candle.low),
-              close: Number(candle.close),
-              epoch: Number(candle.epoch),
-            })),
-          }
-        : {}),
-      ...(response.history
-        ? {
-            history: {
-              prices: response.history.prices.map(Number),
-              times: response.history.times.map(Number),
-            },
-          }
-        : {}),
-    };
-  }
-
   private async openSubscription(key: string, subscription: Subscription) {
     const request = subscription.request;
     try {
       const response = await this.send({
         ticks_history: request.symbol,
-        style: request.style ?? (request.granularity ? "candles" : "ticks"),
+        style: "ticks",
         subscribe: 1,
         adjust_start_time: 1,
         count: 1,
         end: "latest",
-        ...(request.granularity ? { granularity: request.granularity } : {}),
       });
       if (response.error) throw new Error(response.error.message ?? "Deriv subscription failed.");
       if (this.subscriptions.get(key) === subscription) {
         subscription.id = response.subscription?.id;
       } else if (response.subscription?.id) {
-        void this.requestAPI({ forget: response.subscription.id }).catch(() => undefined);
+        void this.send({ forget: response.subscription.id }).catch((error: unknown) => {
+          this.onError(error instanceof Error ? error : new Error("Could not close the market subscription."));
+        });
       }
     } catch (error) {
       this.onStatus("Unavailable");
@@ -245,7 +166,7 @@ export class DerivSmartChartTransport {
     }
   }
 
-  subscribeQuotes(request: DerivSubscriptionRequest, callback: (quote: SmartChartQuote) => void) {
+  subscribeMarket(request: DerivMarketSubscriptionRequest, callback: (quote: DerivMarketQuote) => void) {
     const key = subscriptionKey(request);
     let subscription = this.subscriptions.get(key);
     if (!subscription) {
@@ -263,16 +184,14 @@ export class DerivSmartChartTransport {
     };
   }
 
-  unsubscribeQuotes(request: { symbol?: string; ticks_history?: string; granularity?: number }) {
-    this.forget(subscriptionKey(request));
-  }
-
   private forget(key: string) {
     const subscription = this.subscriptions.get(key);
     if (!subscription) return;
     this.subscriptions.delete(key);
     if (subscription.id) {
-      void this.requestAPI({ forget: subscription.id }).catch(() => undefined);
+      void this.send({ forget: subscription.id }).catch((error: unknown) => {
+        this.onError(error instanceof Error ? error : new Error("Could not close the market subscription."));
+      });
     }
   }
 

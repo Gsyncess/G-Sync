@@ -1,7 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import "../node_modules/@deriv-com/quill-ui/dist/assets/quill-ui.css";
-import "@deriv-com/smartcharts-champion/dist/smartcharts.css";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });

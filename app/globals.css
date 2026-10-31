@@ -410,52 +410,147 @@ input {
   font-size: 9px;
 }
 
-.chart-empty-icon {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
-  border-radius: 12px;
-  background: #e7f5f1;
-  color: #168c7a;
-}
-
-.smartchart-instance,
-.smartchart-placeholder {
-  width: 100%;
-  height: clamp(280px, 42svh, 390px);
-  min-height: 280px;
-  overflow: hidden;
-  background: #fff;
-}
-
-.smartchart-instance .smartcharts {
-  width: 100%;
-  height: 100%;
-  min-height: 280px;
-}
-
-.smartchart-placeholder {
+.market-console-panel {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  flex: 1;
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #d5deeb;
+  border-radius: 12px;
+  background: #101827;
+  box-shadow: 0 8px 26px rgb(26 43 70 / 9%);
+}
+
+.market-console-header,
+.market-console-title,
+.market-console-actions,
+.market-console-status {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 18px;
-  background: #fbfcfd;
-  text-align: center;
 }
 
-.smartchart-placeholder strong {
-  color: #455469;
+.market-console-header {
+  min-height: 66px;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #263449;
+  padding: 10px 16px;
+  background: #172235;
+}
+
+.market-console-title {
+  min-width: 0;
+  gap: 11px;
+}
+
+.market-console-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border: 1px solid #34445c;
+  border-radius: 9px;
+  background: #202e43;
+  color: #70d6b1;
+}
+
+.market-console-title h2 {
+  margin: 0;
+  color: #f0f4fa;
+  font-size: 13px;
+}
+
+.market-console-title p {
+  margin: 4px 0 0;
+  color: #9aa8bb;
+  font-size: 10px;
+}
+
+.market-console-actions {
+  flex: none;
+  gap: 14px;
+}
+
+.market-console-status {
+  gap: 7px;
+  color: #c4cfdd;
+  font-size: 10px;
+}
+
+.market-console-status .status-dot-live {
+  box-shadow: 0 0 0 3px rgb(28 154 115 / 18%);
+}
+
+.market-console-clear {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #34445c;
+  border-radius: 6px;
+  padding: 0 9px;
+  background: #202e43;
+  color: #c4cfdd;
+  font-size: 10px;
+}
+
+.market-console-clear:hover {
+  border-color: #60728b;
+  color: #fff;
+}
+
+.market-console-output {
+  min-height: 260px;
+  flex: 1;
+  overflow: auto;
+  padding: 13px 16px;
+  background-color: #101827;
+  background-image: linear-gradient(rgb(255 255 255 / 1.4%) 1px, transparent 1px);
+  background-size: 100% 25px;
+  color: #d3deec;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 11px;
+  line-height: 1.8;
+  scrollbar-color: #3a4b63 #101827;
 }
 
-.smartchart-placeholder > span:last-child {
-  max-width: 260px;
-  color: #8994a3;
+.market-console-entry {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+
+.market-console-entry time {
+  color: #77869b;
+  font-variant-numeric: tabular-nums;
+}
+
+.market-console-market {
+  color: #82d9b8;
+}
+
+.market-console-analysis {
+  color: #a7c7ff;
+}
+
+.market-console-error {
+  color: #ff9a94;
+}
+
+.market-console-empty {
+  margin: 0;
+  color: #8493a8;
+}
+
+.market-console-footer {
+  border-top: 1px solid #263449;
+  padding: 8px 16px;
+  color: #8594a9;
   font-size: 9px;
-  line-height: 1.5;
 }
 
 .performance-panel {
@@ -660,11 +755,53 @@ input {
 
 @media (min-width: 600px) {
   .dashboard-shell {
-    width: min(100%, 430px);
-    height: min(860px, calc(100dvh - 56px));
+    width: min(1440px, calc(100vw - 56px));
+    height: min(1000px, calc(100dvh - 56px));
     min-height: min(640px, calc(100dvh - 56px));
     border: 7px solid rgba(255, 255, 255, 0.92);
-    border-radius: 38px;
+    border-radius: 24px;
     box-shadow: 0 24px 70px rgba(37, 57, 165, 0.18);
+  }
+
+  .dashboard-content {
+    padding: 20px 24px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .market-console-header {
+    align-items: flex-start;
+    padding: 10px;
+  }
+
+  .market-console-title {
+    gap: 8px;
+  }
+
+  .market-console-title p {
+    max-width: 190px;
+    line-height: 1.4;
+  }
+
+  .market-console-actions {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .market-console-output {
+    min-height: 220px;
+    padding: 10px;
+    font-size: 10px;
+  }
+
+  .market-console-entry {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .market-console-footer {
+    padding: 8px 10px;
+    line-height: 1.4;
   }
 }
