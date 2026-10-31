@@ -352,15 +352,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       <section className="dashboard-content" aria-labelledby="dashboard-title">
         {activeView === "signals" ? (
           <SignalPage
-            derivConnected={derivConnected}
-            derivBusy={derivBusy}
-            botRunning={botRunning}
-            botStatus={botStatus}
             botConfig={botConfig}
             onConfigChange={setBotConfig}
-            onStart={handleStartBot}
-            onStop={handleStopBot}
-            message={derivMessage}
           />
         ) : (
           <>
@@ -429,6 +422,28 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 </div>
               </div>
             </section>
+
+            <div className="home-bot-controls" aria-label="Bot controls">
+              <span className="home-bot-status" role="status">{botStatus}</span>
+              <div className="bot-controls">
+                <button
+                  type="button"
+                  className="bot-start-button"
+                  onClick={handleStartBot}
+                  disabled={!derivConnected || derivBusy || botRunning}
+                >
+                  Start bot
+                </button>
+                <button
+                  type="button"
+                  className="bot-stop-button"
+                  onClick={handleStopBot}
+                  disabled={!botRunning}
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
           </>
         )}
       </section>
@@ -438,7 +453,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           <Home size={19} /><span>Home</span>
         </button>
         <button type="button" className={`bottom-nav-item ${activeView === "signals" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("signals")} aria-current={activeView === "signals" ? "page" : undefined}>
-          <Activity size={19} /><span>Signals</span>
+          <Activity size={19} /><span>Configure</span>
         </button>
         <button type="button" className="bottom-nav-item" disabled aria-label="History coming soon">
           <Clock3 size={19} /><span>History</span>

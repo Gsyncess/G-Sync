@@ -11,6 +11,63 @@ import {
 } from "@/lib/deriv-smartchart-transport";
 
 type SmartChartsModule = typeof import("@deriv-com/smartcharts-champion");
+type SmartChartsRuntimeWindow = Window & {
+  React?: Record<string, unknown>;
+  ReactDOM?: Record<string, unknown>;
+  ReactTransitionGroup?: Record<string, unknown>;
+  QuillUI?: Record<string, unknown>;
+  dayjs?: unknown;
+  mobx?: Record<string, unknown>;
+  mobxReactLite?: Record<string, unknown>;
+  smartcharts?: SmartChartsModule;
+};
+
+let smartChartsLoad: Promise<SmartChartsModule> | null = null;
+
+function loadSmartCharts(): Promise<SmartChartsModule> {
+  if (!smartChartsLoad) {
+    smartChartsLoad = Promise.all([
+      import("react-dom"),
+      import("react-transition-group"),
+      import("react/jsx-runtime"),
+      import("@deriv-com/quill-ui"),
+      import("react"),
+      import("dayjs"),
+      import("mobx"),
+      import("mobx-react-lite"),
+    ]).then(([reactDom, transitions, jsxRuntime, quill, react, dayjs, mobx, mobxReactLite]) => {
+      const runtimeWindow = window as SmartChartsRuntimeWindow;
+      runtimeWindow.React = Object.assign({}, react.default, jsxRuntime);
+      runtimeWindow.ReactDOM = reactDom;
+      runtimeWindow.ReactTransitionGroup = transitions;
+      runtimeWindow.QuillUI = quill;
+      runtimeWindow.dayjs = dayjs.default;
+      runtimeWindow.mobx = mobx;
+      runtimeWindow.mobxReactLite = mobxReactLite;
+
+      return new Promise<SmartChartsModule>((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "/smartcharts/smartcharts.js";
+        script.async = true;
+        script.onload = () => {
+          const smartChartsModule = runtimeWindow.smartcharts;
+          if (!smartChartsModule) {
+            reject(new Error("Deriv SmartCharts did not expose its browser API."));
+            return;
+          }
+          smartChartsModule.setSmartChartsPublicPath("/smartcharts/");
+          resolve(smartChartsModule);
+        };
+        script.onerror = () => reject(new Error("Could not load the Deriv SmartCharts runtime."));
+        document.head.appendChild(script);
+      });
+    }).catch((error: unknown) => {
+      smartChartsLoad = null;
+      throw error;
+    });
+  }
+  return smartChartsLoad;
+}
 
 type MarketChartData = {
   activeSymbols?: unknown[];
@@ -92,10 +149,9 @@ export function DerivSmartChart() {
 
   useEffect(() => {
     let active = true;
-    void import("@deriv-com/smartcharts-champion")
-      .then((loaded) => {
-        loaded.setSmartChartsPublicPath("/smartcharts/");
-        if (active) setSdk(loaded);
+    void loadSmartCharts()
+      .then((module) => {
+        if (active) setSdk(module);
       })
       .catch((error: unknown) => {
         if (active) {
