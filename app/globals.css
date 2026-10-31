@@ -179,6 +179,28 @@ input {
   color: #526174;
 }
 
+.deriv-header-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  background: #e7f5f1;
+  color: #117968;
+  font-size: 10px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.deriv-header-button[aria-disabled="true"],
+.deriv-header-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .dashboard-icon-button:active {
   background: #e7edf4;
 }
@@ -427,23 +449,6 @@ input {
   color: #536176;
   font-size: 8px;
   line-height: 1.35;
-}
-
-.deriv-connect-button {
-  flex: none;
-  border: 0;
-  border-radius: 6px;
-  padding: 6px 8px;
-  background: #e7f5f1;
-  color: #117968;
-  font-size: 9px;
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.deriv-connect-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
 }
 
 .account-connect-row svg {

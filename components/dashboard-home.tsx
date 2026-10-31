@@ -102,6 +102,31 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             <span className={socketOnline ? "status-dot status-dot-live" : "status-dot"} />
             {socketOnline ? "Synced" : "Offline"}
           </span>
+          {derivConnected ? (
+            <button
+              type="button"
+              className="deriv-header-button"
+              onClick={() => void disconnectDeriv()}
+              disabled={derivBusy}
+              title={accountSummary ? `Disconnect Deriv (${accountSummary})` : "Disconnect Deriv account"}
+              aria-label="Disconnect Deriv account"
+            >
+              {derivBusy ? "…" : "Connected"}
+            </button>
+          ) : (
+            <a
+              className="deriv-header-button"
+              href="/api/deriv/oauth/start"
+              aria-label="Connect and authorize your Deriv account"
+              aria-disabled={derivBusy}
+              title={derivBusy ? "Checking Deriv connection" : "Connect and authorize your Deriv account"}
+              onClick={(event) => {
+                if (derivBusy) event.preventDefault();
+              }}
+            >
+              {derivBusy ? "…" : "Connect"}
+            </a>
+          )}
           <button type="button" className="dashboard-icon-button" onClick={onSignOut} aria-label="Sign out" title="Sign out">
             <LogOut size={18} />
           </button>
@@ -172,20 +197,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               </span>
               {derivMessage && <span className="deriv-account-message" role="status">{derivMessage}</span>}
             </div>
-            {derivConnected ? (
-              <button
-                type="button"
-                className="deriv-connect-button"
-                onClick={() => void disconnectDeriv()}
-                disabled={derivBusy}
-              >
-                Disconnect
-              </button>
-            ) : (
-              <a className="deriv-connect-button" href="/api/deriv/oauth/start">
-                Connect
-              </a>
-            )}
           </div>
         </section>
 
