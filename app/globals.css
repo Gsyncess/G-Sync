@@ -305,9 +305,9 @@ input {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  padding: 16px 16px 12px;
+  gap: 0;
+  overflow: hidden;
+  padding: 16px 16px 0;
   scrollbar-width: none;
 }
 
@@ -410,8 +410,11 @@ input {
 }
 
 .market-console-panel {
+  display: flex;
+  flex: 1;
   width: 100%;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #e7ecf1;
   border-radius: 12px;
@@ -419,8 +422,10 @@ input {
 }
 
 .market-console-output {
-  height: clamp(280px, 42svh, 390px);
-  min-height: 280px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
   overflow: auto;
   padding: 14px 16px;
   background: #fff;
@@ -592,10 +597,6 @@ input {
   font-weight: 500;
 }
 
-.bot-trade-progress-active .bot-trade-progress-heading > span:last-child {
-  color: #168c7a;
-}
-
 .bot-trade-progress-track {
   position: relative;
   height: 7px;
@@ -611,11 +612,6 @@ input {
   border-radius: inherit;
   background: linear-gradient(90deg, #39b89a, #168c7a);
   transition: width 180ms ease;
-}
-
-.bot-trade-progress-active > span {
-  width: 30%;
-  animation: open-trade-progress-slide 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 
 .bot-trade-values {
@@ -639,23 +635,152 @@ input {
 }
 
 .dashboard-home-view,
-.dashboard-config-view {
+.dashboard-config-view,
+.dashboard-history-view {
   display: flex;
   min-width: 0;
   flex-direction: column;
 }
 
 .dashboard-home-view {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
   gap: 12px;
+  overflow: hidden;
 }
 
-.dashboard-config-view {
+.dashboard-home-view > .dashboard-greeting {
+  order: 0;
+  flex: none;
+}
+
+.dashboard-home-view > .performance-panel {
+  order: 1;
+  flex: none;
+}
+
+.dashboard-home-view > .home-bot-controls {
+  order: 2;
+  flex: none;
+}
+
+.dashboard-home-view > .market-console-panel {
+  order: 3;
+}
+
+.dashboard-config-view,
+.dashboard-history-view {
   flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .dashboard-home-view[hidden],
-.dashboard-config-view[hidden] {
+.dashboard-config-view[hidden],
+.dashboard-history-view[hidden] {
   display: none;
+}
+
+.history-panel {
+  padding: 18px;
+}
+
+.history-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #edf0f3;
+  padding-bottom: 14px;
+}
+
+.history-heading h2 {
+  margin: 0;
+  color: #263447;
+  font-size: 16px;
+}
+
+.history-heading p {
+  margin: 5px 0 0;
+  color: #8994a3;
+  font-size: 11px;
+}
+
+.history-heading > span {
+  display: grid;
+  min-width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  background: #edf4ff;
+  color: #2539a5;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.history-list {
+  display: grid;
+}
+
+.history-entry {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #edf0f3;
+  padding: 13px 0;
+}
+
+.history-entry:last-child {
+  border-bottom: 0;
+}
+
+.history-entry-main,
+.history-entry-values {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-entry-main > strong {
+  color: #263447;
+  font-size: 11px;
+}
+
+.history-entry-main > time,
+.history-entry > small {
+  color: #8994a3;
+  font-size: 9px;
+}
+
+.history-entry-values {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 7px 16px;
+  color: #8994a3;
+  font-size: 9px;
+}
+
+.history-entry-values strong {
+  margin-left: 3px;
+  color: #263447;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-entry-values .performance-positive strong {
+  color: #168c7a;
+}
+
+.history-entry-values .performance-negative strong {
+  color: #c65050;
+}
+
+.history-empty {
+  margin: 0;
+  padding: 22px 0 4px;
+  color: #8994a3;
+  font-size: 11px;
+  text-align: center;
 }
 
 .signal-config-panel {
@@ -828,19 +953,24 @@ input {
   }
 
   .dashboard-content {
-    padding: 20px 24px 16px;
+    padding: 20px 24px 0;
   }
 }
 
 @media (max-width: 480px) {
-  .market-console-output {
-    padding: 10px;
-    font-size: 10px;
-  }
-
   .market-console-entry {
     grid-template-columns: 72px minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .history-panel {
+    padding: 14px;
+  }
+
+  .history-entry-main {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
 }
 
@@ -878,26 +1008,11 @@ input {
   }
 }
 
-@keyframes open-trade-progress-slide {
-  from {
-    left: 0;
-  }
-  to {
-    left: 70%;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .performance-panel,
   .performance-metric > strong,
-  .rate-ring,
-  .bot-trade-progress-active > span {
+  .rate-ring {
     animation: none;
     transition: none;
-  }
-
-  .bot-trade-progress-active > span {
-    left: 0;
-    width: 100%;
   }
 }

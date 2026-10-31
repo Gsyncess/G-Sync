@@ -43,11 +43,21 @@ type OpenTradeDetails = {
   contractType: "CALL" | "PUT";
 };
 
+type TradeHistoryEntry = {
+  id: string;
+  contractId: number;
+  contractType: "CALL" | "PUT";
+  stake: number;
+  payout: number;
+  currency: string;
+  profit: number;
+  completedAt: string;
+};
+
 type BotRuntime = {
   running: boolean;
   inFlight: boolean;
   unresolvedTrade: boolean;
-  lastBias: MarketSignal["bias"];
   nextStake: number | null;
   sessionProfit: number;
 };
@@ -58,6 +68,21 @@ type DashboardHomeProps = {
   onSignOut: () => void;
 };
 
+function isTradeHistoryEntry(value: unknown): value is TradeHistoryEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.contractId === "number" &&
+    (entry.contractType === "CALL" || entry.contractType === "PUT") &&
+    typeof entry.stake === "number" &&
+    typeof entry.payout === "number" &&
+    typeof entry.currency === "string" &&
+    typeof entry.profit === "number" &&
+    typeof entry.completedAt === "string"
+  );
+}
+
 export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeProps) {
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
@@ -67,10 +92,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
   const [tradeInProgress, setTradeInProgress] = useState(false);
+  const [tradeProgressTicks, setTradeProgressTicks] = useState(0);
   const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
-  const [activeView, setActiveView] = useState<"home" | "signals">("home");
+  const [activeView, setActiveView] = useState<"home" | "signals" | "history">("home");
+  const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
+  const [historyReady, setHistoryReady] = useState(false);
   const [performance, setPerformance] = useState<SessionPerformance>({
     profit: 0,
     wins: 0,
@@ -96,7 +124,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     running: false,
     inFlight: false,
     unresolvedTrade: false,
-    lastBias: "neutral",
     nextStake: null,
     sessionProfit: 0,
   });
@@ -158,6 +185,44 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   }, [loadDerivSession]);
 
   useEffect(() => {
+    setHistoryReady(false);
+    if (!selectedDerivAccountId) {
+      setTradeHistory([]);
+      setHistoryReady(true);
+      return;
+    }
+
+    try {
+      const saved = window.localStorage.getItem(`deriv-bot-history:${selectedDerivAccountId}`);
+      if (!saved) {
+        setTradeHistory([]);
+      } else {
+        const parsed: unknown = JSON.parse(saved);
+        setTradeHistory(Array.isArray(parsed) ? parsed.filter(isTradeHistoryEntry).slice(0, 100) : []);
+      }
+    } catch (error) {
+      console.warn("Could not load saved Deriv bot history.", error);
+      setTradeHistory([]);
+      setDerivMessage("Saved trade history could not be loaded.");
+    } finally {
+      setHistoryReady(true);
+    }
+  }, [selectedDerivAccountId]);
+
+  useEffect(() => {
+    if (!historyReady || !selectedDerivAccountId) return;
+    try {
+      window.localStorage.setItem(
+        `deriv-bot-history:${selectedDerivAccountId}`,
+        JSON.stringify(tradeHistory),
+      );
+    } catch (error) {
+      console.warn("Could not save Deriv bot history.", error);
+      setDerivMessage("Trade history could not be saved on this device.");
+    }
+  }, [historyReady, selectedDerivAccountId, tradeHistory]);
+
+  useEffect(() => {
     if (!derivMenuOpen) return;
     const closeOnOutsideClick = (event: PointerEvent) => {
       if (event.target instanceof Node && !derivMenuRef.current?.contains(event.target)) {
@@ -186,13 +251,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
   const handleMarketSignal = useCallback((signal: MarketSignal) => {
     const runtime = botRuntimeRef.current;
-    if (!signal.ready) {
-      runtime.lastBias = "neutral";
-      return;
-    }
-    const previousBias = runtime.lastBias;
-    runtime.lastBias = signal.bias;
-    if (!runtime.running || runtime.inFlight || signal.bias === "neutral" || signal.bias === previousBias) return;
+    if (!signal.ready || !runtime.running || runtime.inFlight || !signal.crossover) return;
 
     const config = botConfigRef.current;
     if (runtime.sessionProfit >= config.targetProfit || runtime.sessionProfit <= -config.targetLoss) {
@@ -210,7 +269,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return;
     }
 
-    const contractType = signal.bias === "bullish" ? "CALL" : "PUT";
+    const contractType = signal.crossover;
     const stake = runtime.nextStake ?? config.stakeAmount;
     if (stake > account.balance) {
       runtime.running = false;
@@ -221,6 +280,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
     runtime.inFlight = true;
     setTradeInProgress(true);
+    setTradeProgressTicks(0);
     setOpenTradeDetails(null);
     setBotStatus(`${contractType} · placing 5-tick contract`);
     void (async () => {
@@ -258,6 +318,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         const decoder = new TextDecoder();
         let remaining = "";
         let settledProfit: number | null = null;
+        let settledTrade: TradeHistoryEntry | null = null;
         let streamFailed = false;
 
         const handleTradeEvent = (line: string) => {
@@ -292,11 +353,44 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             return;
           }
 
+          if (update.type === "progress") {
+            if (
+              typeof update.ticksPassed !== "number" ||
+              !Number.isFinite(update.ticksPassed) ||
+              typeof update.totalTicks !== "number" ||
+              !Number.isFinite(update.totalTicks)
+            ) {
+              throw new Error("Deriv returned invalid contract progress.");
+            }
+            setTradeProgressTicks(Math.max(0, Math.min(5, update.ticksPassed)));
+            return;
+          }
+
           if (update.type === "settled") {
-            if (typeof update.profit !== "number" || !Number.isFinite(update.profit)) {
+            if (
+              typeof update.contractId !== "number" ||
+              (update.contractType !== "CALL" && update.contractType !== "PUT") ||
+              typeof update.stake !== "number" ||
+              typeof update.payout !== "number" ||
+              typeof update.currency !== "string" ||
+              typeof update.profit !== "number" ||
+              !Number.isFinite(update.profit)
+            ) {
               throw new Error("Deriv returned an invalid contract result.");
             }
             settledProfit = update.profit;
+            const completedAt = new Date().toISOString();
+            settledTrade = {
+              id: `${account.accountId}-${update.contractId}-${completedAt}`,
+              contractId: update.contractId,
+              contractType: update.contractType,
+              stake: update.stake,
+              payout: update.payout,
+              currency: update.currency,
+              profit: update.profit,
+              completedAt,
+            };
+            setTradeProgressTicks(5);
             setOpenTradeDetails(null);
             return;
           }
@@ -307,7 +401,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             runtime.unresolvedTrade = tradeMayBeOpen;
             runtime.running = false;
             setBotRunning(false);
-            if (!tradeMayBeOpen) setOpenTradeDetails(null);
+            if (!tradeMayBeOpen) {
+              setOpenTradeDetails(null);
+              setTradeProgressTicks(0);
+            }
             setBotStatus(
               tradeMayBeOpen
                 ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
@@ -333,9 +430,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         }
         if (remaining.trim() && !streamFailed) handleTradeEvent(remaining);
         if (streamFailed) return;
-        if (settledProfit === null) throw new Error("Deriv ended the trade stream before settlement.");
+        const completedTrade = settledTrade;
+        if (settledProfit === null || completedTrade === null) {
+          throw new Error("Deriv ended the trade stream before settlement.");
+        }
 
         const profit = settledProfit;
+        setTradeHistory((current) => [completedTrade, ...current].slice(0, 100));
         runtime.sessionProfit += profit;
         if (profit > 0) {
           runtime.nextStake = config.stakeAmount;
@@ -377,6 +478,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       } finally {
         if (!runtime.unresolvedTrade) runtime.inFlight = false;
         setTradeInProgress(runtime.inFlight || runtime.unresolvedTrade);
+        if (!runtime.unresolvedTrade) setTradeProgressTicks(0);
       }
     })();
   }, []);
@@ -417,7 +519,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return;
     }
     runtime.running = true;
-    runtime.lastBias = "neutral";
     runtime.nextStake ??= botConfig.stakeAmount;
     setBotRunning(true);
     setBotStatus(
@@ -482,6 +583,12 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return `${value.toFixed(2)} ${currency}`;
     }
   };
+  const formatTradeTime = (date: string) => {
+    const parsedDate = new Date(date);
+    return Number.isNaN(parsedDate.getTime())
+      ? "Unknown time"
+      : parsedDate.toLocaleString();
+  };
   const decidedTrades = performance.wins + performance.losses;
   const hasReliableWinRate = decidedTrades >= 5;
   const winRate = hasReliableWinRate
@@ -494,7 +601,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       running: false,
       inFlight: false,
       unresolvedTrade: false,
-      lastBias: "neutral",
       nextStake: null,
       sessionProfit: 0,
     };
@@ -593,7 +699,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         </div>
       </header>
 
-      <section className="dashboard-content" aria-labelledby="dashboard-title">
+      <section className="dashboard-content" aria-label="Dashboard pages">
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
             <div className="dashboard-greeting">
               <div>
@@ -668,12 +774,15 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   <span>{tradeInProgress ? "In progress" : "No open trade"}</span>
                 </div>
                 <div
-                  className={`bot-trade-progress-track ${tradeInProgress ? "bot-trade-progress-active" : ""}`}
+                  className="bot-trade-progress-track"
                   role="progressbar"
                   aria-label="5-tick trade progress"
+                  aria-valuemin={0}
+                  aria-valuemax={5}
+                  aria-valuenow={tradeProgressTicks}
                   aria-valuetext={tradeInProgress ? "Trade is being processed and awaiting settlement" : "No open trade"}
                 >
-                  <span />
+                  <span style={{ width: `${(tradeProgressTicks / 5) * 100}%` }} />
                 </div>
                 <div className="bot-trade-values" aria-live="polite">
                   {openTradeDetails ? (
@@ -681,6 +790,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                       <span>{openTradeDetails.contractType}</span>
                       <span>Stake {formatTradeAmount(openTradeDetails.stake, openTradeDetails.currency)}</span>
                       <span>Potential payout {formatTradeAmount(openTradeDetails.payout, openTradeDetails.currency)}</span>
+                      <span>{tradeProgressTicks} / 5 ticks</span>
                     </>
                   ) : tradeInProgress ? (
                     <span>Waiting for Deriv contract details…</span>
@@ -725,6 +835,41 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             onConfigChange={setBotConfig}
           />
         </div>
+        <div className="dashboard-history-view" id="dashboard-history-view" hidden={activeView !== "history"}>
+          <section className="market-panel history-panel" aria-label="Completed bot trade history">
+            <header className="history-heading">
+              <div>
+                <h2>Trade history</h2>
+                <p>Completed bot trades for this Deriv account</p>
+              </div>
+              <span>{historyReady ? tradeHistory.length : "…"}</span>
+            </header>
+            {!historyReady ? (
+              <p className="history-empty">Loading trade history…</p>
+            ) : tradeHistory.length === 0 ? (
+              <p className="history-empty">No completed bot trades for this account yet.</p>
+            ) : (
+              <div className="history-list">
+                {tradeHistory.map((trade) => (
+                  <article className="history-entry" key={trade.id}>
+                    <div className="history-entry-main">
+                      <strong>{trade.contractType} · R_100 · 5 ticks</strong>
+                      <time dateTime={trade.completedAt}>{formatTradeTime(trade.completedAt)}</time>
+                    </div>
+                    <div className="history-entry-values">
+                      <span>Stake <strong>{formatTradeAmount(trade.stake, trade.currency)}</strong></span>
+                      <span>Payout <strong>{formatTradeAmount(trade.payout, trade.currency)}</strong></span>
+                      <span className={trade.profit > 0 ? "performance-positive" : trade.profit < 0 ? "performance-negative" : ""}>
+                        P/L <strong>{formatTradeAmount(trade.profit, trade.currency)}</strong>
+                      </span>
+                    </div>
+                    <small>Contract #{trade.contractId}</small>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       </section>
 
       <nav className="dashboard-bottom-nav" aria-label="Main navigation">
@@ -734,7 +879,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         <button type="button" className={`bottom-nav-item ${activeView === "signals" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("signals")} aria-current={activeView === "signals" ? "page" : undefined} aria-controls="dashboard-config-view">
           <Activity size={19} /><span>Configure</span>
         </button>
-        <button type="button" className="bottom-nav-item" disabled aria-label="History coming soon">
+        <button type="button" className={`bottom-nav-item ${activeView === "history" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("history")} aria-current={activeView === "history" ? "page" : undefined} aria-controls="dashboard-history-view">
           <Clock3 size={19} /><span>History</span>
         </button>
         <button type="button" className="bottom-nav-item" disabled aria-label="Settings coming soon">

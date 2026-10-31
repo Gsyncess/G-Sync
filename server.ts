@@ -731,6 +731,10 @@ async function startServer() {
             }
             response.write(`${JSON.stringify({ type: "purchased", ...purchase, currency: account.currency, contractType })}\n`);
           },
+          onProgress: (progress) => {
+            if (response.destroyed || response.writableEnded || !streamStarted) return;
+            response.write(`${JSON.stringify({ type: "progress", ...progress })}\n`);
+          },
         });
         if (streamStarted) {
           if (!response.destroyed && !response.writableEnded) {

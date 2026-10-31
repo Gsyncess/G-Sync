@@ -15,6 +15,7 @@ type TradeOptions = {
   currency: string;
   stake: number;
   onPurchased?: (purchase: { stake: number; payout: number }) => void;
+  onProgress?: (progress: { ticksPassed: number; totalTicks: number }) => void;
 };
 
 type DerivMessage = {
@@ -26,6 +27,8 @@ type DerivMessage = {
     contract_id?: unknown;
     is_sold?: unknown;
     profit?: unknown;
+    tick_count?: unknown;
+    tick_stream?: unknown;
   };
 };
 
@@ -202,6 +205,13 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
 
       if (phase === "contract" && message.msg_type === "proposal_open_contract") {
         const contract = message.proposal_open_contract;
+        if (contract?.contract_id === contractId && Array.isArray(contract.tick_stream)) {
+          const ticksPassed = Math.min(5, contract.tick_stream.length);
+          const totalTicks = typeof contract.tick_count === "number" && contract.tick_count > 0
+            ? contract.tick_count
+            : 5;
+          options.onProgress?.({ ticksPassed, totalTicks });
+        }
         if (
           !contract ||
           typeof contract.contract_id !== "number" ||
