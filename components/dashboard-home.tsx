@@ -12,7 +12,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { DerivSmartChart } from "@/components/deriv-smartchart";
+import DynamicDerivSmartChart from "@/components/deriv-smartchart";
 
 type DerivAccount = {
   accountId: string;
@@ -284,7 +284,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               </div>
             </div>
           </div>
-          <DerivSmartChart />
+          <DynamicDerivSmartChart />
         </section>
 
         <section className="performance-panel" aria-label="Trading performance">

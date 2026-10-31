@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, Wifi } from "lucide-react";
 import {
@@ -270,3 +271,7 @@ export function DerivSmartChart() {
     </div>
   );
 }
+
+export default dynamic(() => Promise.resolve(DerivSmartChart), {
+  ssr: false,
+});
