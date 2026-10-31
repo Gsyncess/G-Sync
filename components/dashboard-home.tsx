@@ -12,7 +12,7 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { MarketConsole } from "@/components/market-console";
+import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
 
 type DerivAccount = {
@@ -30,6 +30,22 @@ type DerivSessionResponse = {
   error?: string;
 };
 
+type SessionPerformance = {
+  profit: number;
+  wins: number;
+  losses: number;
+  trades: number;
+};
+
+type BotRuntime = {
+  running: boolean;
+  inFlight: boolean;
+  unresolvedTrade: boolean;
+  lastBias: MarketSignal["bias"];
+  nextStake: number | null;
+  sessionProfit: number;
+};
+
 type DashboardHomeProps = {
   email: string;
   socketOnline: boolean;
@@ -45,21 +61,36 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
   const [botStatus, setBotStatus] = useState("Ready");
+  const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals">("home");
+  const [performance, setPerformance] = useState<SessionPerformance>({
+    profit: 0,
+    wins: 0,
+    losses: 0,
+    trades: 0,
+  });
+  const selectedDerivAccount = derivAccounts.find(
+    (account) => account.accountId === selectedDerivAccountId,
+  );
   const [botConfig, setBotConfig] = useState<SignalConfig>({
     targetProfit: 20,
     targetLoss: 10,
     stakeAmount: 5,
   });
   const derivMenuRef = useRef<HTMLDivElement>(null);
-  const botStateRef = useRef({
-    price: 100,
-    emaFast: 100,
-    emaSlow: 100,
-    macd: 0,
-    signal: 0,
-    position: "flat" as "flat" | "long" | "short",
-    entryPrice: 0,
+  const botConfigRef = useRef(botConfig);
+  botConfigRef.current = botConfig;
+  const selectedAccountRef = useRef<DerivAccount | undefined>(undefined);
+  selectedAccountRef.current = selectedDerivAccount;
+  const derivConnectedRef = useRef(derivConnected);
+  derivConnectedRef.current = derivConnected;
+  const botRuntimeRef = useRef<BotRuntime>({
+    running: false,
+    inFlight: false,
+    unresolvedTrade: false,
+    lastBias: "neutral",
+    nextStake: null,
+    sessionProfit: 0,
   });
 
   const loadDerivSession = useCallback(async (showLoading = true) => {
@@ -147,61 +178,135 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     };
   }, [derivMenuOpen]);
 
-  useEffect(() => {
-    if (!botRunning || !derivConnected) {
-      setBotStatus("Ready");
+  const handleFeedStatus = useCallback((status: typeof marketFeedStatus) => {
+    setMarketFeedStatus(status);
+    if (status !== "Live" && botRuntimeRef.current.running) {
+      botRuntimeRef.current.running = false;
+      setBotRunning(false);
+      setBotStatus("Market feed interrupted. Bot stopped.");
+    }
+  }, []);
+
+  const handleMarketSignal = useCallback((signal: MarketSignal) => {
+    const runtime = botRuntimeRef.current;
+    if (!signal.ready) {
+      runtime.lastBias = "neutral";
+      return;
+    }
+    const previousBias = runtime.lastBias;
+    runtime.lastBias = signal.bias;
+    if (!runtime.running || runtime.inFlight || signal.bias === "neutral" || signal.bias === previousBias) return;
+
+    const config = botConfigRef.current;
+    if (runtime.sessionProfit >= config.targetProfit || runtime.sessionProfit <= -config.targetLoss) {
+      runtime.running = false;
+      setBotRunning(false);
+      setBotStatus(runtime.sessionProfit >= config.targetProfit ? "Session profit target reached" : "Session loss limit reached");
       return;
     }
 
-    const timer = window.setInterval(() => {
-      const state = botStateRef.current;
-      const drift = (Math.random() - 0.5) * 1.8;
-      const nextPrice = Number(Math.max(0, state.price + drift).toFixed(2));
-      const fastAlpha = 2 / (12 + 1);
-      const slowAlpha = 2 / (26 + 1);
-      state.emaFast = state.emaFast + fastAlpha * (nextPrice - state.emaFast);
-      state.emaSlow = state.emaSlow + slowAlpha * (nextPrice - state.emaSlow);
-      const macd = state.emaFast - state.emaSlow;
-      const signalAlpha = 2 / (9 + 1);
-      state.macd = macd;
-      state.signal = state.signal === 0 ? macd : state.signal + signalAlpha * (macd - state.signal);
-      state.price = nextPrice;
+    const account = selectedAccountRef.current;
+    if (!derivConnectedRef.current || !account) {
+      runtime.running = false;
+      setBotRunning(false);
+      setBotStatus("Deriv account unavailable. Bot stopped.");
+      return;
+    }
 
-      const direction = state.macd > state.signal ? "long" : state.macd < state.signal ? "short" : "flat";
+    const contractType = signal.bias === "bullish" ? "CALL" : "PUT";
+    const stake = runtime.nextStake ?? config.stakeAmount;
+    if (stake > account.balance) {
+      runtime.running = false;
+      setBotRunning(false);
+      setBotStatus("Next stake exceeds the selected account balance. Bot stopped.");
+      return;
+    }
 
-      if (state.position === "flat") {
-        if (direction === "long") {
-          state.position = "long";
-          state.entryPrice = nextPrice;
-          setBotStatus("Long set");
-        } else if (direction === "short") {
-          state.position = "short";
-          state.entryPrice = nextPrice;
-          setBotStatus("Short set");
+    runtime.inFlight = true;
+    setBotStatus(`${contractType} · placing 5-tick contract`);
+    void (async () => {
+      try {
+        const response = await fetch("/api/deriv/bot-trade", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accountId: account.accountId,
+            contractType,
+            stake,
+          }),
+        });
+        const result = await response.json() as {
+          contractId?: unknown;
+          profit?: unknown;
+          error?: unknown;
+          tradeMayBeOpen?: unknown;
+        };
+        if (!response.ok) {
+          const tradeMayBeOpen = result.tradeMayBeOpen === true;
+          runtime.inFlight = tradeMayBeOpen;
+          runtime.unresolvedTrade = tradeMayBeOpen;
+          runtime.running = false;
+          setBotRunning(false);
+          setBotStatus(
+            tradeMayBeOpen
+              ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
+              : typeof result.error === "string" ? result.error : "Trade failed. Bot stopped.",
+          );
+          return;
         }
-      } else if (state.position === "long") {
-        const profit = (nextPrice - state.entryPrice) * botConfig.stakeAmount;
-        const loss = (state.entryPrice - nextPrice) * botConfig.stakeAmount;
-        if (profit >= botConfig.targetProfit || loss >= botConfig.targetLoss || direction !== "long") {
-          state.position = "flat";
-          state.entryPrice = 0;
-          setBotStatus(profit >= botConfig.targetProfit ? "Profit target hit" : "Stop loss hit");
+
+        if (typeof result.profit !== "number" || !Number.isFinite(result.profit)) {
+          throw new Error("Deriv returned an invalid contract result.");
         }
-      } else if (state.position === "short") {
-        const profit = (state.entryPrice - nextPrice) * botConfig.stakeAmount;
-        const loss = (nextPrice - state.entryPrice) * botConfig.stakeAmount;
-        if (profit >= botConfig.targetProfit || loss >= botConfig.targetLoss || direction !== "short") {
-          state.position = "flat";
-          state.entryPrice = 0;
-          setBotStatus(profit >= botConfig.targetProfit ? "Profit target hit" : "Stop loss hit");
+
+        const profit = result.profit;
+        runtime.sessionProfit += profit;
+        if (profit > 0) {
+          runtime.nextStake = config.stakeAmount;
+        } else if (profit < 0) {
+          runtime.nextStake = Number((stake * 1.5).toFixed(2));
         }
+        setPerformance((current) => ({
+          profit: current.profit + profit,
+          wins: current.wins + (profit > 0 ? 1 : 0),
+          losses: current.losses + (profit < 0 ? 1 : 0),
+          trades: current.trades + 1,
+        }));
+
+        if (runtime.sessionProfit >= botConfigRef.current.targetProfit) {
+          runtime.running = false;
+          setBotRunning(false);
+          setBotStatus("Session profit target reached");
+        } else if (runtime.sessionProfit <= -botConfigRef.current.targetLoss) {
+          runtime.running = false;
+          setBotRunning(false);
+          setBotStatus("Session loss limit reached");
+        } else {
+          setBotStatus(
+            runtime.running
+              ? `${profit >= 0 ? "Trade won" : "Trade lost"} · ${profit >= 0 ? "base stake restored" : "next stake ×1.5"}`
+              : "Bot stopped · current trade settled",
+          );
+        }
+      } catch (error) {
+        runtime.inFlight = true;
+        runtime.unresolvedTrade = true;
+        runtime.running = false;
+        setBotRunning(false);
+        setBotStatus(
+          error instanceof Error
+            ? `${error.message} Check Deriv positions before restarting.`
+            : "Trade result unconfirmed. Check Deriv positions before restarting.",
+        );
+      } finally {
+        if (!runtime.unresolvedTrade) runtime.inFlight = false;
       }
-    }, 2500);
-
-    return () => window.clearInterval(timer);
-  }, [botConfig.stakeAmount, botConfig.targetLoss, botConfig.targetProfit, botRunning, derivConnected]);
+    })();
+  }, []);
 
   const disconnectDeriv = async () => {
+    botRuntimeRef.current.running = false;
+    setBotRunning(false);
     setDerivBusy(true);
     setDerivMessage("");
     try {
@@ -211,6 +316,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setDerivAccounts([]);
       setSelectedDerivAccountId("");
       setDerivMenuOpen(false);
+      setPerformance({ profit: 0, wins: 0, losses: 0, trades: 0 });
       window.localStorage.removeItem("deriv-account-id");
       setDerivMessage("Your Deriv account has been disconnected.");
     } catch (error) {
@@ -221,23 +327,42 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   };
 
   const handleStartBot = () => {
-    if (!derivConnected) return;
+    const runtime = botRuntimeRef.current;
+    if (
+      !derivConnected ||
+      !selectedDerivAccount ||
+      marketFeedStatus !== "Live" ||
+      runtime.inFlight ||
+      runtime.unresolvedTrade
+    ) return;
+    if (runtime.sessionProfit >= botConfig.targetProfit || runtime.sessionProfit <= -botConfig.targetLoss) {
+      setBotStatus(runtime.sessionProfit >= botConfig.targetProfit ? "Session profit target reached" : "Session loss limit reached");
+      return;
+    }
+    runtime.running = true;
+    runtime.lastBias = "neutral";
+    runtime.nextStake ??= botConfig.stakeAmount;
     setBotRunning(true);
-    setBotStatus("Watching market");
+    setBotStatus(
+      selectedDerivAccount.accountType === "real"
+        ? "Watching market · real-account trades enabled"
+        : "Watching market · demo account",
+    );
   };
 
   const handleStopBot = () => {
+    botRuntimeRef.current.running = false;
     setBotRunning(false);
-    setBotStatus("Ready");
-    botStateRef.current = { price: 100, emaFast: 100, emaSlow: 100, macd: 0, signal: 0, position: "flat", entryPrice: 0 };
+    setBotStatus(
+      botRuntimeRef.current.inFlight
+        ? "Stopped · current contract will finish"
+        : "Ready",
+    );
   };
 
   const accountSummary = derivAccounts
     .map(({ accountType, currency }) => [accountType, currency].filter(Boolean).join(" · "))
     .join(", ");
-  const selectedDerivAccount = derivAccounts.find(
-    (account) => account.accountId === selectedDerivAccountId,
-  );
   const formatBalance = (account: DerivAccount, compact = false) => {
     const currency = /^[A-Z]{3}$/.test(account.currency) ? account.currency : "USD";
     try {
@@ -255,7 +380,41 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       })}`;
     }
   };
+  const formatPerformanceAmount = (value: number) => {
+    const currency = selectedDerivAccount?.currency ?? "USD";
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch {
+      return `${value.toFixed(2)} ${currency}`;
+    }
+  };
+  const winRate = performance.trades > 0
+    ? Math.round((performance.wins / performance.trades) * 100)
+    : 0;
+  const targetRange = botConfig.targetProfit + botConfig.targetLoss;
+  const zeroPosition = (botConfig.targetLoss / targetRange) * 100;
+  const currentPosition = Math.min(
+    100,
+    Math.max(0, ((performance.profit + botConfig.targetLoss) / targetRange) * 100),
+  );
+  const progressStart = Math.min(zeroPosition, currentPosition);
+  const progressWidth = Math.abs(currentPosition - zeroPosition);
   const selectDerivAccount = (account: DerivAccount) => {
+    if (botRuntimeRef.current.running || botRuntimeRef.current.inFlight) return;
+    setPerformance({ profit: 0, wins: 0, losses: 0, trades: 0 });
+    botRuntimeRef.current = {
+      running: false,
+      inFlight: false,
+      unresolvedTrade: false,
+      lastBias: "neutral",
+      nextStake: null,
+      sessionProfit: 0,
+    };
     setSelectedDerivAccountId(account.accountId);
     window.localStorage.setItem("deriv-account-id", account.accountId);
     setDerivMenuOpen(false);
@@ -279,7 +438,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 type="button"
                 className="deriv-header-button deriv-balance-button"
                 onClick={() => setDerivMenuOpen((open) => !open)}
-                disabled={derivBusy}
+                disabled={derivBusy || botRunning || botRuntimeRef.current.inFlight}
                 title={`${formatBalance(selectedDerivAccount)} · ${selectedDerivAccount.accountType} account`}
                 aria-label={`Deriv ${selectedDerivAccount.accountType} balance ${formatBalance(selectedDerivAccount)}. Switch account`}
                 aria-expanded={derivMenuOpen}
@@ -299,6 +458,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                       role="menuitemradio"
                       aria-checked={account.accountId === selectedDerivAccount.accountId}
                       onClick={() => selectDerivAccount(account)}
+                      disabled={botRunning || botRuntimeRef.current.inFlight}
                     >
                       <span>
                         <strong>{account.accountType === "demo" ? "Demo" : "Real"}</strong>
@@ -312,6 +472,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                     className="deriv-account-disconnect"
                     role="menuitem"
                     onClick={() => void disconnectDeriv()}
+                    disabled={botRunning || botRuntimeRef.current.inFlight}
                   >
                     Disconnect Deriv
                   </button>
@@ -323,7 +484,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               type="button"
               className="deriv-header-button"
               onClick={() => void disconnectDeriv()}
-              disabled={derivBusy}
+              disabled={derivBusy || botRunning || botRuntimeRef.current.inFlight}
               title={accountSummary || "No eligible Deriv accounts found"}
               aria-label="Deriv connected, disconnect account"
             >
@@ -363,12 +524,19 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 <h1 id="dashboard-title">Your dashboard</h1>
                 <p className="dashboard-subtitle">{email || "Your G-Sync account"}</p>
               </div>
-              <span className="market-session"><span className="status-dot status-dot-waiting" /> Market watch</span>
+              <span className="market-session">
+                <span className={`status-dot ${marketFeedStatus === "Live" ? "status-dot-live" : "status-dot-waiting"}`} />
+                {marketFeedStatus === "Live" ? "Market live" : `Market ${marketFeedStatus.toLowerCase()}`}
+              </span>
             </div>
 
-            <MarketConsole />
+            <MarketConsole onMarketSignal={handleMarketSignal} onFeedStatus={handleFeedStatus} />
 
-            <section className="performance-panel" aria-label="Trading performance">
+            <section
+              className="performance-panel"
+              aria-label="Trading performance"
+              key={selectedDerivAccountId || "no-account"}
+            >
               <div className="performance-heading">
                 <div>
                   <h2>Bot performance</h2>
@@ -381,23 +549,60 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               <div className="performance-metrics">
                 <div className="performance-metric">
                   <span>P/L</span>
-                  <strong>--</strong>
+                  <strong
+                    key={`profit-${performance.trades}`}
+                    className={performance.profit > 0 ? "performance-positive" : performance.profit < 0 ? "performance-negative" : ""}
+                  >
+                    {derivConnected ? formatPerformanceAmount(performance.profit) : "--"}
+                  </strong>
                 </div>
                 <div className="performance-metric">
                   <span>W</span>
-                  <strong>--</strong>
+                  <strong key={`wins-${performance.trades}`}>{performance.wins}</strong>
                 </div>
                 <div className="performance-metric">
                   <span>L</span>
-                  <strong>--</strong>
+                  <strong key={`losses-${performance.trades}`}>{performance.losses}</strong>
                 </div>
                 <div className="performance-metric performance-rate">
                   <span>Rate</span>
-                  <div className="rate-ring" aria-label="Win rate not available">
-                    <span>--</span>
+                  <div
+                    className="rate-ring"
+                    style={{
+                      background: `conic-gradient(#168c7a ${winRate}%, #e4eaf0 ${winRate}% 100%)`,
+                    }}
+                    aria-label={performance.trades > 0 ? `Win rate ${winRate} percent` : "Win rate not available"}
+                  >
+                    <span>{performance.trades > 0 ? `${winRate}%` : "--"}</span>
                   </div>
                 </div>
               </div>
+              <div className="performance-progress">
+                <div className="performance-progress-labels">
+                  <span>Session target progress</span>
+                  <span>{derivConnected ? formatPerformanceAmount(performance.profit) : "--"}</span>
+                </div>
+                <div
+                  className={`performance-progress-track ${performance.profit < 0 ? "progress-negative" : "progress-positive"}`}
+                  role="progressbar"
+                  aria-label="Progress between session loss and profit targets"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={currentPosition}
+                  aria-valuetext={derivConnected ? `${formatPerformanceAmount(performance.profit)} session result` : "Connect Deriv to track session progress"}
+                >
+                  <span className="performance-progress-zero" style={{ left: `${zeroPosition}%` }} />
+                  <span
+                    className="performance-progress-fill"
+                    style={{ left: `${progressStart}%`, width: `${progressWidth}%` }}
+                  />
+                </div>
+                <div className="performance-progress-targets">
+                  <span>−{formatPerformanceAmount(botConfig.targetLoss)}</span>
+                  <span>Profit target {formatPerformanceAmount(botConfig.targetProfit)}</span>
+                </div>
+              </div>
+              <p className="performance-trade-count">{performance.trades} completed bot trade{performance.trades === 1 ? "" : "s"} this session</p>
               <div className="account-connect-row">
                 <ShieldCheck size={15} />
                 <div className="account-connect-content">
@@ -420,7 +625,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   type="button"
                   className="bot-start-button"
                   onClick={handleStartBot}
-                  disabled={!derivConnected || derivBusy || botRunning}
+                  disabled={!derivConnected || !selectedDerivAccount || derivBusy || botRunning || marketFeedStatus !== "Live" || botRuntimeRef.current.unresolvedTrade}
+                  title={botRuntimeRef.current.unresolvedTrade ? "Check Deriv open positions before starting again" : undefined}
                 >
                   Start bot
                 </button>
@@ -433,6 +639,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   Stop
                 </button>
               </div>
+              <p className={`dashboard-disclaimer ${selectedDerivAccount?.accountType === "real" ? "dashboard-disclaimer-real" : ""}`}>
+                {botRuntimeRef.current.unresolvedTrade
+                  ? "A trade result is unconfirmed. Verify open positions in Deriv before reloading or restarting."
+                  : selectedDerivAccount?.accountType === "real"
+                    ? "Real account selected. Starting the bot can place live trades using 5-tick contracts."
+                    : "Bot signals use MACD crossovers. Contracts run for 5 ticks; the next stake rises 1.5× after a loss."}
+              </p>
             </div>
           </>
         )}

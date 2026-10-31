@@ -6,6 +6,7 @@ import helmet from "helmet";
 import next from "next";
 import { createClient } from "@supabase/supabase-js";
 import { Server as SocketServer } from "socket.io";
+import { DerivTradeError, executeDerivFiveTickTrade } from "./lib/deriv-trading";
 
 const development = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
@@ -55,6 +56,7 @@ const derivSessionStore = new Map<string, {
   expiresAt: number;
   accountId: string | null;
 }>();
+const activeDerivTrades = new Set<string>();
 
 function appendCookie(
   response: express.Response,
@@ -192,7 +194,14 @@ function collectDerivAccountEntries(payload: unknown): Array<Record<string, unkn
   return results;
 }
 
-function normalizeDerivAccounts(payload: unknown) {
+type NormalizedDerivAccount = {
+  accountId: string;
+  accountType: "demo" | "real";
+  balance: number;
+  currency: string;
+};
+
+function normalizeDerivAccounts(payload: unknown): NormalizedDerivAccount[] {
   const records = collectDerivAccountEntries(payload);
   return records.flatMap((account) => {
     const accountId =
@@ -229,9 +238,10 @@ function normalizeDerivAccounts(payload: unknown) {
       return [];
     }
 
+    const normalizedType: "demo" | "real" = normalizedAccountType === "demo" ? "demo" : "real";
     return [{
       accountId,
-      accountType: normalizedAccountType,
+      accountType: normalizedType,
       balance,
       currency,
     }];
@@ -583,6 +593,147 @@ async function startServer() {
     response.set("Cache-Control", "no-store");
     response.json({ connected: false });
   });
+
+  app.post(
+    "/api/deriv/bot-trade",
+    rateLimit({
+      windowMs: 60 * 1000,
+      limit: 20,
+      standardHeaders: "draft-8",
+      legacyHeaders: false,
+      message: { error: "Too many bot trades. Please wait before trying again." },
+    }),
+    express.json({ limit: "4kb" }),
+    async (request, response) => {
+      response.set("Cache-Control", "no-store");
+      const requestOrigin = request.get("origin");
+      if (!requestOrigin) {
+        response.status(403).json({ error: "Trading requests must come from this app." });
+        return;
+      }
+      try {
+        if (new URL(requestOrigin).origin !== `${request.protocol}://${request.get("host")}`) {
+          response.status(403).json({ error: "Trading requests must come from this app." });
+          return;
+        }
+      } catch {
+        response.status(403).json({ error: "Trading request origin is invalid." });
+        return;
+      }
+
+      const body: unknown = request.body;
+      if (
+        !body ||
+        typeof body !== "object" ||
+        typeof (body as Record<string, unknown>).accountId !== "string" ||
+        typeof (body as Record<string, unknown>).contractType !== "string" ||
+        typeof (body as Record<string, unknown>).stake !== "number"
+      ) {
+        response.status(400).json({ error: "Invalid bot trade request." });
+        return;
+      }
+      const { accountId, contractType, stake } = body as {
+        accountId: string;
+        contractType: string;
+        stake: number;
+      };
+      if (
+        !/^[a-zA-Z0-9_-]{2,64}$/.test(accountId) ||
+        (contractType !== "CALL" && contractType !== "PUT") ||
+        !Number.isFinite(stake) ||
+        stake <= 0
+      ) {
+        response.status(400).json({ error: "Invalid account, direction, or stake." });
+        return;
+      }
+
+      let accessToken = readEncodedCookie(request, "deriv_access_token");
+      if (!accessToken) {
+        accessToken = await refreshDerivAccessToken(request, response);
+      }
+      if (!accessToken) {
+        response.status(401).json({ error: "Connect your Deriv account before trading." });
+        return;
+      }
+
+      let accounts: NormalizedDerivAccount[] = [];
+      let accountLookupSucceeded = false;
+      let lastAccountLookupStatus: number | null = null;
+      let accountLookupFailed = false;
+      for (const endpoint of [
+        "https://api.deriv.com/api/v3/accounts",
+        "https://api.derivws.com/trading/v1/options/accounts",
+      ]) {
+        try {
+          const accountResponse = await fetch(endpoint, {
+            headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          lastAccountLookupStatus = accountResponse.status;
+          if (!accountResponse.ok) continue;
+          const payload: unknown = await accountResponse.json();
+          accountLookupSucceeded = true;
+          accounts = normalizeDerivAccounts(payload);
+          if (accounts.length > 0) break;
+        } catch {
+          accountLookupFailed = true;
+        }
+      }
+
+      if (!accountLookupSucceeded && accountLookupFailed) {
+        console.error("Could not verify the selected Deriv account before trading.");
+        response.status(503).json({ error: "Could not verify Deriv accounts. Please try again." });
+        return;
+      }
+      if (!accountLookupSucceeded) {
+        response.status(lastAccountLookupStatus === 401 ? 401 : 503).json({
+          error: lastAccountLookupStatus === 401
+            ? "Deriv authorization expired. Reconnect your account."
+            : "Could not verify Deriv accounts. Please try again.",
+        });
+        return;
+      }
+      const account = accounts.find((candidate) => candidate.accountId === accountId);
+      if (!account) {
+        response.status(403).json({ error: "That Deriv account is not authorized for this session." });
+        return;
+      }
+      if (stake > account.balance) {
+        response.status(400).json({ error: "The trade stake exceeds the selected account balance." });
+        return;
+      }
+
+      const tradeKey = `${account.accountType}:${account.accountId}`;
+      if (activeDerivTrades.has(tradeKey)) {
+        response.status(409).json({ error: "A contract is already being processed for this account." });
+        return;
+      }
+      activeDerivTrades.add(tradeKey);
+      try {
+        const trade = await executeDerivFiveTickTrade({
+          accessToken,
+          accountId,
+          accountType: account.accountType,
+          contractType,
+          currency: account.currency,
+          stake,
+        });
+        response.json(trade);
+      } catch (error) {
+        if (error instanceof DerivTradeError) {
+          response.status(error.tradeMayBeOpen ? 504 : 502).json({
+            error: error.message,
+            tradeMayBeOpen: error.tradeMayBeOpen,
+          });
+        } else {
+          console.error("Could not complete the Deriv bot trade.");
+          response.status(502).json({ error: "Could not complete the Deriv bot trade." });
+        }
+      } finally {
+        activeDerivTrades.delete(tradeKey);
+      }
+    },
+  );
 
   io.on("connection", (socket) => {
     const userId = socket.data.userId as string;

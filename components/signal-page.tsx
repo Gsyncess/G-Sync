@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AlertTriangle } from "lucide-react";
 
 export type SignalConfig = {
   targetProfit: number;
@@ -40,20 +41,17 @@ export function SignalPage({
   };
 
   return (
-    <section className="market-panel" aria-label="Configuration page">
-      <div className="market-toolbar">
-        <div className="market-title-wrap">
-          <div>
-            <h2>Configure</h2>
-            <p>Set trading limits</p>
-          </div>
-        </div>
-      </div>
+    <section className="market-panel signal-config-panel" aria-label="Configuration page">
+      <header className="signal-config-heading">
+        <h2>Configure</h2>
+        <p>Choose your session limits and starting stake.</p>
+      </header>
 
       <div className="signal-config">
         <div className="signal-config-grid">
           <label className="signal-config-field">
             <span>Target profit</span>
+            <small>Stop the bot when session profit reaches this amount.</small>
             <input
               className="signal-config-input"
               type="number"
@@ -66,6 +64,7 @@ export function SignalPage({
           </label>
           <label className="signal-config-field">
             <span>Target loss</span>
+            <small>Stop the bot when session loss reaches this amount.</small>
             <input
               className="signal-config-input"
               type="number"
@@ -78,6 +77,7 @@ export function SignalPage({
           </label>
           <label className="signal-config-field">
             <span>Stake amount</span>
+            <small>Starting stake for each trade.</small>
             <input
               className="signal-config-input"
               type="number"
@@ -90,6 +90,10 @@ export function SignalPage({
           </label>
         </div>
       </div>
+      <p className="signal-config-warning" role="note">
+        <AlertTriangle size={15} aria-hidden="true" />
+        <span>Trading involves risk. After a loss, the next stake increases by 1.5× until a win or your session limit is reached.</span>
+      </p>
     </section>
   );
 }

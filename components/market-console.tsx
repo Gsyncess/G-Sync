@@ -1,20 +1,33 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Terminal, Trash2 } from "lucide-react";
 import { DerivMarketTransport, type DerivMarketQuote } from "@/lib/deriv-market-transport";
 
 type ConsoleEntry = {
   id: number;
   time: string;
   message: string;
-  level: "info" | "market" | "analysis" | "error";
+  level: "info" | "price-up" | "price-down" | "price-neutral" | "bullish" | "bearish" | "neutral" | "error";
 };
 
 type IndicatorState = {
   fast: number | null;
   slow: number | null;
   signal: number | null;
+  ticks: number;
+};
+
+export type MarketSignal = {
+  price: number;
+  macd: number;
+  signal: number;
+  bias: "bullish" | "bearish" | "neutral";
+  ready: boolean;
+};
+
+type MarketConsoleProps = {
+  onMarketSignal?: (signal: MarketSignal) => void;
+  onFeedStatus?: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void;
 };
 
 const MAX_CONSOLE_ENTRIES = 100;
@@ -24,12 +37,12 @@ function formatPrice(price: number) {
   return price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 5 });
 }
 
-export function MarketConsole() {
+export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
-  const [connectionStatus, setConnectionStatus] = useState("Connecting");
   const entriesRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(0);
-  const indicatorRef = useRef<IndicatorState>({ fast: null, slow: null, signal: null });
+  const indicatorRef = useRef<IndicatorState>({ fast: null, slow: null, signal: null, ticks: 0 });
+  const previousPriceRef = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -41,14 +54,14 @@ export function MarketConsole() {
         message,
         level,
       };
-      setEntries((current) => [...current.slice(-(MAX_CONSOLE_ENTRIES - 1)), entry]);
+      setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
 
     appendEntry(`Connecting to the public ${MARKET_SYMBOL} market feed.`);
     const transport = new DerivMarketTransport(
       (status) => {
         if (!active) return;
-        setConnectionStatus(status);
+        onFeedStatus?.(status);
         appendEntry(
           status === "Live"
             ? "Public market feed connected."
@@ -63,17 +76,32 @@ export function MarketConsole() {
       { symbol: MARKET_SYMBOL },
       (quote: DerivMarketQuote) => {
         const price = quote.Close;
+        const previousPrice = previousPriceRef.current;
+        previousPriceRef.current = price;
         const state = indicatorRef.current;
         state.fast = state.fast === null ? price : state.fast + (2 / 13) * (price - state.fast);
         state.slow = state.slow === null ? price : state.slow + (2 / 27) * (price - state.slow);
         const macd = state.fast - state.slow;
         state.signal = state.signal === null ? macd : state.signal + (2 / 10) * (macd - state.signal);
+        state.ticks += 1;
+        const ready = state.ticks >= 26;
         const bias = macd > state.signal ? "Bullish" : macd < state.signal ? "Bearish" : "Neutral";
+        onMarketSignal?.({
+          price,
+          macd,
+          signal: state.signal,
+          bias: bias.toLowerCase() as MarketSignal["bias"],
+          ready,
+        });
 
-        appendEntry(`${MARKET_SYMBOL} ${formatPrice(price)}`, "market", quote.DT);
+        const priceDirection = previousPrice === null || price === previousPrice
+          ? "price-neutral"
+          : price > previousPrice ? "price-up" : "price-down";
+        const analysisLevel = bias.toLowerCase() as "bullish" | "bearish" | "neutral";
+        appendEntry(`${MARKET_SYMBOL} ${formatPrice(price)}`, priceDirection, quote.DT);
         appendEntry(
-          `MACD ${macd.toFixed(5)} / signal ${state.signal.toFixed(5)} · ${bias}`,
-          "analysis",
+          `MACD ${macd.toFixed(5)} / signal ${state.signal.toFixed(5)} · ${bias}${ready ? "" : " · warming up"}`,
+          analysisLevel,
           quote.DT,
         );
       },
@@ -84,33 +112,14 @@ export function MarketConsole() {
       unsubscribe();
       transport.close();
     };
-  }, []);
+  }, [onFeedStatus, onMarketSignal]);
 
   useEffect(() => {
-    entriesRef.current?.scrollTo({ top: entriesRef.current.scrollHeight });
+    entriesRef.current?.scrollTo({ top: 0 });
   }, [entries]);
 
   return (
     <section className="market-console-panel" aria-label="Live market and analysis console">
-      <header className="market-console-header">
-        <div className="market-console-title">
-          <span className="market-console-icon"><Terminal size={18} /></span>
-          <div>
-            <h2>Market console</h2>
-            <p>Volatility 100 · live market and MACD analysis · read-only</p>
-          </div>
-        </div>
-        <div className="market-console-actions">
-          <span className="market-console-status">
-            <span className={`status-dot ${connectionStatus === "Live" ? "status-dot-live" : ""}`} />
-            {connectionStatus}
-          </span>
-          <button type="button" className="market-console-clear" onClick={() => setEntries([])} aria-label="Clear console">
-            <Trash2 size={15} />
-            <span>Clear</span>
-          </button>
-        </div>
-      </header>
       <div className="market-console-output" ref={entriesRef} role="log" aria-label="Market feed and analysis log" aria-live="off">
         {entries.length === 0 ? (
           <p className="market-console-empty">Waiting for market updates…</p>
@@ -121,9 +130,6 @@ export function MarketConsole() {
           </div>
         ))}
       </div>
-      <footer className="market-console-footer">
-        Public Deriv market data · Analysis is informational and does not place trades.
-      </footer>
     </section>
   );
 }
