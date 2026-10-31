@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
@@ -16,13 +16,31 @@ const development = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const derivAppId = (process.env.DERIV_APP_ID ?? process.env.NEXT_PUBLIC_DERIV_APP_ID)?.trim();
 const derivRedirectUri = process.env.DERIV_REDIRECT_URI?.trim();
+const subscriptionsEnabled = process.env.SUBSCRIPTIONS_ENABLED?.trim().toLowerCase() === "true";
+const nowPaymentsApiKey = process.env.NOWPAYMENTS_API_KEY?.trim();
+const nowPaymentsIpnSecret = process.env.NOWPAYMENTS_IPN_SECRET?.trim();
+const nowPaymentsIpnCallbackUrl = process.env.NOWPAYMENTS_IPN_CALLBACK_URL?.trim();
+const SUBSCRIPTION_PRICE_USD = 5;
+const SUBSCRIPTION_DURATION_HOURS = 12;
+const SUBSCRIPTION_PAY_CURRENCY = "usdttrc20";
 const nextApp = next({ dev: development });
 const nextHandler = nextApp.getRequestHandler();
 const supabaseAuth =
   supabaseUrl && supabaseAnonKey
     ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: {
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+          persistSession: false,
+        },
+      })
+    : null;
+const supabaseAdmin =
+  supabaseUrl && supabaseServiceRoleKey
+    ? createClient(supabaseUrl, supabaseServiceRoleKey, {
         auth: {
           autoRefreshToken: false,
           detectSessionInUrl: false,
@@ -54,12 +72,60 @@ const securityHeaders = {
 
 const oauthCookiePath = "/api/deriv/oauth/";
 const derivCookiePath = "/api/deriv";
-const derivTokenRefreshes = new Map<string, Promise<{
+const derivSessionStore = new Map<string, {
   accessToken: string;
   refreshToken: string;
-  expiresIn: number;
-} | null>>();
+  expiresAt: number;
+  accountId: string | null;
+}>();
 const activeDerivTrades = new Set<string>();
+
+async function authenticateSupabaseRequest(request: express.Request) {
+  if (!supabaseAuth) return null;
+  const accessToken = request.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!accessToken) return null;
+  const { data, error } = await supabaseAuth.auth.getUser(accessToken);
+  return error ? null : data.user;
+}
+
+function sortJsonKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, sortJsonKeys(nested)]),
+    );
+  }
+  return value;
+}
+
+function verifyNowPaymentsSignature(body: unknown, signature: string) {
+  if (!nowPaymentsIpnSecret) return false;
+  const expected = createHmac("sha512", nowPaymentsIpnSecret)
+    .update(JSON.stringify(sortJsonKeys(body)))
+    .digest();
+  let actual: Buffer;
+  try {
+    actual = Buffer.from(signature, "hex");
+  } catch {
+    return false;
+  }
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+async function getSubscriptionExpiry(userId: string) {
+  if (!supabaseAdmin) return { expiresAt: null, error: "Subscription storage is not configured." };
+  const { data, error } = await supabaseAdmin
+    .from("bot_subscriptions")
+    .select("expires_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) return { expiresAt: null, error: "Could not load subscription status." };
+  return {
+    expiresAt: typeof data?.expires_at === "string" ? data.expires_at : null,
+    error: null,
+  };
+}
 
 function appendCookie(
   response: express.Response,
@@ -105,81 +171,65 @@ function readEncodedCookie(request: express.Request, name: string) {
   return value ? Buffer.from(value, "base64url").toString("utf8") : null;
 }
 
+function saveDerivSession(sessionKey: string, payload: { accessToken: string; refreshToken?: string; expiresIn?: number; accountId?: string | null }) {
+  const expiresInMs = Number.isFinite(payload.expiresIn) && payload.expiresIn! > 0
+    ? payload.expiresIn! * 1000
+    : 60 * 60 * 1000;
+  derivSessionStore.set(sessionKey, {
+    accessToken: payload.accessToken,
+    refreshToken: payload.refreshToken ?? "",
+    expiresAt: Date.now() + expiresInMs,
+    accountId: payload.accountId ?? null,
+  });
+}
+
 async function refreshDerivAccessToken(request: express.Request, response: express.Response) {
   const refreshToken = readEncodedCookie(request, "deriv_refresh_token");
   if (!refreshToken) return null;
 
-  const refreshKey = createHash("sha256").update(refreshToken).digest("hex");
-  let refreshPromise = derivTokenRefreshes.get(refreshKey);
-  if (!refreshPromise) {
-    refreshPromise = (async () => {
-      const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          client_id: derivAppId ?? "",
-          refresh_token: refreshToken,
-        }),
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (tokenResponse.status === 400 || tokenResponse.status === 401) return null;
-      if (!tokenResponse.ok) {
-        throw new Error(`Deriv token refresh failed with status ${tokenResponse.status}.`);
-      }
-
-      const tokenData = (await tokenResponse.json()) as {
-        access_token?: unknown;
-        refresh_token?: unknown;
-        expires_in?: unknown;
-      };
-      if (
-        typeof tokenData.access_token !== "string" ||
-        typeof tokenData.expires_in !== "number" ||
-        !Number.isFinite(tokenData.expires_in) ||
-        tokenData.expires_in <= 0
-      ) {
-        throw new Error("Deriv returned an invalid refreshed token.");
-      }
-      return {
-        accessToken: tokenData.access_token,
-        refreshToken: typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : refreshToken,
-        expiresIn: tokenData.expires_in,
-      };
-    })();
-    derivTokenRefreshes.set(refreshKey, refreshPromise);
-  }
-
-  let tokens: Awaited<typeof refreshPromise>;
   try {
-    tokens = await refreshPromise;
-  } finally {
-    if (derivTokenRefreshes.get(refreshKey) === refreshPromise) {
-      derivTokenRefreshes.delete(refreshKey);
+    const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: derivAppId ?? "",
+        refresh_token: refreshToken,
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      clearCookie(response, "deriv_access_token", derivCookiePath);
+      clearCookie(response, "deriv_refresh_token", derivCookiePath);
+      derivSessionStore.delete("default");
+      return null;
     }
-  }
-  if (!tokens) {
-    clearCookie(response, "deriv_access_token", derivCookiePath);
-    clearCookie(response, "deriv_refresh_token", derivCookiePath);
+
+    const tokenData = (await tokenResponse.json()) as {
+      access_token?: unknown;
+      refresh_token?: unknown;
+      expires_in?: unknown;
+    };
+    if (typeof tokenData.access_token !== "string") return null;
+
+    const nextExpiresIn = typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+      ? tokenData.expires_in
+      : 3600;
+    const nextRefresh = typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : refreshToken;
+    const encodedAccessToken = Buffer.from(tokenData.access_token).toString("base64url");
+    const encodedRefreshToken = Buffer.from(nextRefresh).toString("base64url");
+    appendCookie(response, "deriv_access_token", encodedAccessToken, derivCookiePath, Math.max(1, Math.floor(nextExpiresIn)));
+    appendCookie(response, "deriv_refresh_token", encodedRefreshToken, derivCookiePath, 30 * 24 * 60 * 60);
+    saveDerivSession("default", {
+      accessToken: tokenData.access_token,
+      refreshToken: nextRefresh,
+      expiresIn: nextExpiresIn,
+    });
+    return tokenData.access_token;
+  } catch (error) {
+    console.error("Could not refresh Deriv token.", error);
     return null;
   }
-
-  appendCookie(
-    response,
-    "deriv_access_token",
-    Buffer.from(tokens.accessToken).toString("base64url"),
-    derivCookiePath,
-    Math.max(1, Math.floor(tokens.expiresIn)),
-  );
-  appendCookie(
-    response,
-    "deriv_refresh_token",
-    Buffer.from(tokens.refreshToken).toString("base64url"),
-    derivCookiePath,
-    30 * 24 * 60 * 60,
-  );
-  return tokens.accessToken;
 }
 
 function coerceDerivBalance(value: unknown): number | null {
@@ -330,6 +380,388 @@ async function startServer() {
   app.get("/api/health", (_request, response) => {
     response.set("Cache-Control", "no-store");
     response.json({ status: "ok", service: "g-sync", realtime: "socket.io" });
+  });
+
+  app.get("/api/account", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({
+        error: supabaseAuth ? "Sign in to load your profile." : "Supabase authentication is not configured.",
+      });
+      return;
+    }
+
+    const metadata = user.user_metadata ?? {};
+    const username = [
+      metadata.username,
+      metadata.name,
+      user.email?.split("@")[0],
+    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "User";
+    const displayName = [
+      metadata.full_name,
+      metadata.name,
+      username,
+    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? username;
+
+    if (supabaseAdmin) {
+      const { error: profileError } = await supabaseAdmin
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          email: user.email ?? null,
+          username,
+          display_name: displayName,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "id" });
+      if (profileError) {
+        console.error("Could not save the authenticated user's profile.", profileError);
+        response.status(503).json({ error: "Could not save your profile to Supabase." });
+        return;
+      }
+    }
+
+    let expiresAt: string | null = null;
+    if (subscriptionsEnabled) {
+      const subscription = await getSubscriptionExpiry(user.id);
+      if (subscription.error) {
+        response.status(503).json({ error: subscription.error });
+        return;
+      }
+      expiresAt = subscription.expiresAt;
+    }
+    response.json({
+      accountId: user.id,
+      email: user.email ?? "",
+      username,
+      displayName,
+      subscription: {
+        enabled: subscriptionsEnabled,
+        expiresAt,
+        active: !subscriptionsEnabled || (expiresAt !== null && Date.parse(expiresAt) > Date.now()),
+      },
+    });
+  });
+
+  app.post(
+    "/api/nowpayments/ipn",
+    express.json({ limit: "32kb" }),
+    async (request, response) => {
+      response.set("Cache-Control", "no-store");
+      if (!supabaseAdmin || !nowPaymentsIpnSecret) {
+        response.status(503).json({ error: "NOWPayments notifications are not configured." });
+        return;
+      }
+      const signature = request.get("x-nowpayments-sig");
+      if (!signature || !verifyNowPaymentsSignature(request.body, signature)) {
+        response.status(401).json({ error: "Invalid payment notification signature." });
+        return;
+      }
+
+      const body: unknown = request.body;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        response.status(400).json({ error: "Invalid payment notification." });
+        return;
+      }
+      const notification = body as Record<string, unknown>;
+      const paymentId = notification.payment_id;
+      const orderId = notification.order_id;
+      const paymentStatus = notification.payment_status;
+      if (
+        (typeof paymentId !== "string" && typeof paymentId !== "number") ||
+        typeof orderId !== "string" ||
+        typeof paymentStatus !== "string"
+      ) {
+        response.status(400).json({ error: "Payment notification is missing required fields." });
+        return;
+      }
+
+      const normalizedPaymentId = String(paymentId);
+      const { data: existingPayment, error: paymentLookupError } = await supabaseAdmin
+        .from("nowpayments_payments")
+        .select("payment_id, order_id, pay_currency, price_amount, payment_status, actually_paid, payment_expires_at")
+        .eq("payment_id", normalizedPaymentId)
+        .maybeSingle();
+      if (paymentLookupError) {
+        console.error("Could not look up the NOWPayments payment notification.", paymentLookupError);
+        response.status(503).json({ error: "Could not verify the payment notification." });
+        return;
+      }
+      if (
+        !existingPayment ||
+        existingPayment.order_id !== orderId ||
+        (typeof notification.pay_currency === "string" &&
+          existingPayment.pay_currency.toLowerCase() !== notification.pay_currency.toLowerCase()) ||
+        (notification.price_amount !== undefined &&
+          Number(notification.price_amount) !== Number(existingPayment.price_amount))
+      ) {
+        response.status(400).json({ error: "Payment notification does not match an app payment." });
+        return;
+      }
+
+      const allowedStatuses = new Set([
+        "waiting",
+        "confirming",
+        "confirmed",
+        "sending",
+        "partially_paid",
+        "finished",
+        "failed",
+        "refunded",
+        "expired",
+      ]);
+      if (!allowedStatuses.has(paymentStatus)) {
+        response.status(400).json({ error: "Unknown payment status." });
+        return;
+      }
+      const nextStatus = existingPayment.payment_status === "finished"
+        ? "finished"
+        : paymentStatus;
+      const actuallyPaid = Number(notification.actually_paid);
+      const { error: paymentUpdateError } = await supabaseAdmin
+        .from("nowpayments_payments")
+        .update({
+          payment_status: nextStatus,
+          actually_paid: Number.isFinite(actuallyPaid) ? actuallyPaid : existingPayment.actually_paid,
+          ipn_data: notification,
+          payment_expires_at: typeof notification.expiration_estimate_date === "string"
+            ? notification.expiration_estimate_date
+            : existingPayment.payment_expires_at,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("payment_id", normalizedPaymentId)
+        .eq("order_id", orderId);
+      if (paymentUpdateError) {
+        console.error("Could not update the NOWPayments payment status.", paymentUpdateError);
+        response.status(503).json({ error: "Could not save the payment status." });
+        return;
+      }
+
+      if (nextStatus === "finished") {
+        const { error: activationError } = await supabaseAdmin.rpc(
+          "activate_gsync_subscription_from_payment",
+          { p_payment_id: normalizedPaymentId },
+        );
+        if (activationError) {
+          console.error("Could not activate a paid bot subscription.", activationError);
+          response.status(503).json({ error: "Could not activate the paid subscription." });
+          return;
+        }
+      }
+      response.json({ received: true });
+    },
+  );
+
+  app.post("/api/subscription/payments", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!subscriptionsEnabled) {
+      response.status(404).json({ error: "Subscriptions are currently disabled." });
+      return;
+    }
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in before purchasing a subscription." });
+      return;
+    }
+    if (!supabaseAdmin || !nowPaymentsApiKey || !nowPaymentsIpnSecret || !nowPaymentsIpnCallbackUrl) {
+      response.status(503).json({ error: "In-app subscription payments are not fully configured." });
+      return;
+    }
+    const currentSubscription = await getSubscriptionExpiry(user.id);
+    if (currentSubscription.error) {
+      response.status(503).json({ error: currentSubscription.error });
+      return;
+    }
+
+    let callbackUrl: URL;
+    try {
+      callbackUrl = new URL(nowPaymentsIpnCallbackUrl);
+    } catch {
+      response.status(503).json({ error: "NOWPAYMENTS_IPN_CALLBACK_URL is invalid." });
+      return;
+    }
+    if (
+      callbackUrl.pathname !== "/api/nowpayments/ipn" ||
+      callbackUrl.search ||
+      callbackUrl.hash ||
+      (process.env.NODE_ENV === "production" && callbackUrl.protocol !== "https:")
+    ) {
+      response.status(503).json({ error: "Configure the exact HTTPS NOWPayments notification URL." });
+      return;
+    }
+
+    const orderId = `gs-${randomBytes(16).toString("hex")}`;
+    let providerResponse: Response;
+    try {
+      providerResponse = await fetch("https://api.nowpayments.io/v1/payment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": nowPaymentsApiKey,
+        },
+        body: JSON.stringify({
+          price_amount: SUBSCRIPTION_PRICE_USD,
+          price_currency: "usd",
+          pay_currency: SUBSCRIPTION_PAY_CURRENCY,
+          ipn_callback_url: callbackUrl.toString(),
+          order_id: orderId,
+          order_description: "G-Sync 12-hour bot subscription",
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error) {
+      console.error("Could not create an in-app NOWPayments payment.", error);
+      response.status(503).json({ error: "Could not start payment. Please try again." });
+      return;
+    }
+    const providerPayload: unknown = await providerResponse.json().catch(() => null);
+    if (!providerResponse.ok || !providerPayload || typeof providerPayload !== "object") {
+      console.error("NOWPayments rejected an in-app payment request.", { status: providerResponse.status });
+      response.status(502).json({ error: "NOWPayments could not create the payment. Please try again." });
+      return;
+    }
+    const paymentData = providerPayload as Record<string, unknown>;
+    const paymentIdValue = paymentData.payment_id;
+    const payAddress = paymentData.pay_address;
+    const payAmount = Number(paymentData.pay_amount);
+    if (
+      (typeof paymentIdValue !== "string" && typeof paymentIdValue !== "number") ||
+      typeof payAddress !== "string" ||
+      !payAddress ||
+      !Number.isFinite(payAmount) ||
+      payAmount <= 0 ||
+      typeof paymentData.pay_currency !== "string"
+    ) {
+      console.error("NOWPayments returned incomplete in-app payment instructions.");
+      response.status(502).json({ error: "NOWPayments returned invalid payment instructions." });
+      return;
+    }
+
+    const paymentId = String(paymentIdValue);
+    const createdAt = new Date().toISOString();
+    const initialStatus = typeof paymentData.payment_status === "string"
+      ? paymentData.payment_status
+      : "waiting";
+    const { error: insertError } = await supabaseAdmin
+      .from("nowpayments_payments")
+      .insert({
+        payment_id: paymentId,
+        user_id: user.id,
+        order_id: orderId,
+        price_amount: SUBSCRIPTION_PRICE_USD,
+        price_currency: "usd",
+        pay_currency: paymentData.pay_currency,
+        pay_amount: payAmount,
+        pay_address: payAddress,
+        payment_status: initialStatus,
+        payment_expires_at: typeof paymentData.expiration_estimate_date === "string"
+          ? paymentData.expiration_estimate_date
+          : null,
+        created_at: createdAt,
+        updated_at: createdAt,
+      });
+    if (insertError) {
+      console.error("Could not save the NOWPayments payment.", insertError);
+      response.status(503).json({ error: "Could not save payment status. Please contact support before paying." });
+      return;
+    }
+
+    response.status(201).json({
+      paymentId,
+      payAddress,
+      payAmount,
+      payCurrency: paymentData.pay_currency,
+      priceAmount: SUBSCRIPTION_PRICE_USD,
+      priceCurrency: "USD",
+      expiresAt: typeof paymentData.expiration_estimate_date === "string"
+        ? paymentData.expiration_estimate_date
+        : null,
+      status: initialStatus,
+    });
+  });
+
+  app.get("/api/subscription/payments", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!subscriptionsEnabled || !supabaseAdmin) {
+      response.status(404).json({ error: "Subscription payment history is unavailable." });
+      return;
+    }
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in to view payment history." });
+      return;
+    }
+
+    const { data: payments, error } = await supabaseAdmin
+      .from("nowpayments_payments")
+      .select("payment_id, price_amount, price_currency, pay_amount, pay_currency, actually_paid, payment_status, payment_expires_at, created_at, updated_at, activated_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) {
+      console.error("Could not load a user's subscription payment history.", error);
+      response.status(503).json({ error: "Could not load payment history." });
+      return;
+    }
+    response.json({
+      payments: (payments ?? []).map((payment) => ({
+        paymentId: payment.payment_id,
+        priceAmount: Number(payment.price_amount),
+        priceCurrency: payment.price_currency,
+        payAmount: Number(payment.pay_amount),
+        payCurrency: payment.pay_currency,
+        actuallyPaid: payment.actually_paid === null ? null : Number(payment.actually_paid),
+        status: payment.payment_status,
+        expiresAt: payment.payment_expires_at,
+        createdAt: payment.created_at,
+        updatedAt: payment.updated_at,
+        activatedAt: payment.activated_at,
+      })),
+    });
+  });
+
+  app.get("/api/subscription/payments/:paymentId", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!subscriptionsEnabled || !supabaseAdmin) {
+      response.status(404).json({ error: "Subscription payments are unavailable." });
+      return;
+    }
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in to check payment status." });
+      return;
+    }
+    const paymentId = request.params.paymentId;
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(paymentId)) {
+      response.status(400).json({ error: "Invalid payment id." });
+      return;
+    }
+    const [{ data: payment, error: paymentError }, subscription] = await Promise.all([
+      supabaseAdmin
+        .from("nowpayments_payments")
+        .select("payment_id, pay_address, pay_amount, pay_currency, payment_status, payment_expires_at")
+        .eq("payment_id", paymentId)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      getSubscriptionExpiry(user.id),
+    ]);
+    if (paymentError || subscription.error) {
+      response.status(503).json({ error: "Could not check the payment status." });
+      return;
+    }
+    if (!payment) {
+      response.status(404).json({ error: "Payment not found." });
+      return;
+    }
+    response.json({
+      paymentId: payment.payment_id,
+      payAddress: payment.pay_address,
+      payAmount: Number(payment.pay_amount),
+      payCurrency: payment.pay_currency,
+      status: payment.payment_status,
+      expiresAt: payment.payment_expires_at,
+      subscriptionExpiresAt: subscription.expiresAt,
+    });
   });
 
   app.get("/api/deriv/oauth/start", (request, response) => {
@@ -503,7 +935,6 @@ async function startServer() {
         derivCookiePath,
         expiresInSeconds,
       );
-      if (!refreshToken) clearCookie(response, "deriv_refresh_token", derivCookiePath);
       if (refreshToken) {
         appendCookie(
           response,
@@ -513,6 +944,11 @@ async function startServer() {
           30 * 24 * 60 * 60,
         );
       }
+      saveDerivSession("default", {
+        accessToken,
+        refreshToken,
+        expiresIn: expiresInSeconds,
+      });
       redirectToResult("connected");
     } catch (error) {
       console.error("Deriv OAuth token exchange could not be completed.", error);
@@ -524,18 +960,16 @@ async function startServer() {
   app.get("/api/deriv/session", async (request, response) => {
     response.set("Cache-Control", "no-store");
     let accessToken = readEncodedCookie(request, "deriv_access_token");
+    const storedSession = derivSessionStore.get("default");
+    if (!accessToken && storedSession && storedSession.expiresAt > Date.now()) {
+      accessToken = storedSession.accessToken;
+      const encodedToken = Buffer.from(accessToken).toString("base64url");
+      appendCookie(response, "deriv_access_token", encodedToken, derivCookiePath, Math.max(1, Math.floor((storedSession.expiresAt - Date.now()) / 1000)));
+    }
+
     if (!accessToken) {
-      try {
-        accessToken = await refreshDerivAccessToken(request, response);
-      } catch (error) {
-        console.warn("Deriv token refresh is temporarily unavailable.", error);
-        response.status(503).json({
-          connected: Boolean(readEncodedCookie(request, "deriv_refresh_token")),
-          accounts: [],
-          warning: "Deriv is temporarily unavailable. The account connection has been preserved; retrying automatically.",
-        });
-        return;
-      }
+      const refreshedToken = await refreshDerivAccessToken(request, response);
+      accessToken = refreshedToken ?? null;
     }
 
     if (!accessToken) {
@@ -552,26 +986,23 @@ async function startServer() {
 
       for (const endpoint of accountEndpoints) {
         try {
-          const fetchAccounts = (token: string) => fetch(endpoint, {
+          const accountResponse = await fetch(endpoint, {
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${accessToken}`,
               Accept: "application/json",
             },
-            signal: AbortSignal.timeout(10_000),
           });
-          let accountResponse = await fetchAccounts(accessToken);
           if (accountResponse.status === 401) {
             const refreshedToken = await refreshDerivAccessToken(request, response);
             if (refreshedToken) {
               accessToken = refreshedToken;
-              accountResponse = await fetchAccounts(accessToken);
-              if (accountResponse.status === 401) continue;
-            } else {
-              clearCookie(response, "deriv_access_token", derivCookiePath);
-              clearCookie(response, "deriv_refresh_token", derivCookiePath);
-              response.json({ connected: false, expired: true });
-              return;
+              continue;
             }
+            clearCookie(response, "deriv_access_token", derivCookiePath);
+            clearCookie(response, "deriv_refresh_token", derivCookiePath);
+            derivSessionStore.delete("default");
+            response.json({ connected: false, expired: true });
+            return;
           }
           if (!accountResponse.ok) continue;
 
@@ -619,15 +1050,7 @@ async function startServer() {
     }
 
     let accessToken = readEncodedCookie(request, "deriv_access_token");
-    if (!accessToken) {
-      try {
-        accessToken = await refreshDerivAccessToken(request, response);
-      } catch (error) {
-        console.warn("Could not refresh Deriv credentials for the balance stream.", error);
-        response.status(503).json({ error: "Deriv is temporarily unavailable. Balance updates will retry." });
-        return;
-      }
-    }
+    if (!accessToken) accessToken = await refreshDerivAccessToken(request, response);
     if (!accessToken) {
       response.status(401).json({ error: "Connect your Deriv account to receive balance updates." });
       return;
@@ -672,6 +1095,7 @@ async function startServer() {
   app.post("/api/deriv/session/disconnect", (_request, response) => {
     clearCookie(response, "deriv_access_token", derivCookiePath);
     clearCookie(response, "deriv_refresh_token", derivCookiePath);
+    derivSessionStore.delete("default");
     response.set("Cache-Control", "no-store");
     response.json({ connected: false });
   });
@@ -703,6 +1127,28 @@ async function startServer() {
         return;
       }
 
+      if (subscriptionsEnabled) {
+        const user = await authenticateSupabaseRequest(request);
+        if (!user) {
+          response.status(supabaseAuth ? 401 : 503).json({
+            error: supabaseAuth ? "Sign in before starting the bot." : "Supabase authentication is not configured.",
+          });
+          return;
+        }
+        const subscription = await getSubscriptionExpiry(user.id);
+        if (subscription.error) {
+          response.status(503).json({ error: subscription.error });
+          return;
+        }
+        if (!subscription.expiresAt || Date.parse(subscription.expiresAt) <= Date.now()) {
+          response.status(403).json({
+            code: "SUBSCRIPTION_REQUIRED",
+            error: "An active 12-hour subscription is required to trade. Renew in Settings.",
+          });
+          return;
+        }
+      }
+
       const body: unknown = request.body;
       if (
         !body ||
@@ -722,13 +1168,10 @@ async function startServer() {
       if (
         !/^[a-zA-Z0-9_-]{2,64}$/.test(accountId) ||
         (contractType !== "CALL" && contractType !== "PUT") ||
-        !Number.isFinite(stake)
+        !Number.isFinite(stake) ||
+        stake <= 0
       ) {
         response.status(400).json({ error: "Invalid account, direction, or stake." });
-        return;
-      }
-      if (stake < 1) {
-        response.status(400).json({ error: "The minimum bot stake is $1." });
         return;
       }
 
@@ -784,7 +1227,7 @@ async function startServer() {
         return;
       }
       if (stake > account.balance) {
-        response.status(400).json({ error: "Insufficient balance for this trade stake." });
+        response.status(400).json({ error: "The trade stake exceeds the selected account balance." });
         return;
       }
 

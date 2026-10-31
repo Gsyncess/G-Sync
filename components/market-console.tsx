@@ -10,49 +10,51 @@ type ConsoleEntry = {
   level: "info" | "price-up" | "price-down" | "price-neutral" | "bullish" | "bearish" | "neutral" | "error";
 };
 
-type BreakoutState = {
-  prices: number[];
-  previousPrice: number | null;
+type IndicatorState = {
+  fast: number | null;
+  slow: number | null;
+  signal: number | null;
+  ticks: number;
+  previousHistogram: number | null;
   lastTickIdentity: string | null;
 };
 
 export type MarketSignal = {
   price: number;
+  macd: number;
+  signal: number;
+  bias: "bullish" | "bearish" | "neutral";
   ready: boolean;
-  tradeSignal: "CALL" | "PUT" | null;
+  crossover: "CALL" | "PUT" | null;
 };
 
 type MarketConsoleProps = {
-  isBotRunning: boolean;
   onMarketSignal?: (signal: MarketSignal) => void;
   onFeedStatus?: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void;
 };
 
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
-const BREAKOUT_LOOKBACK_TICKS = 30;
+const SCAN_INTERVAL = 20;
+const INDICATOR_WARMUP_TICKS = 100;
 
-export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: MarketConsoleProps) {
+export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const entriesRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(0);
-  const isBotRunningRef = useRef(isBotRunning);
-  isBotRunningRef.current = isBotRunning;
-  const recentEntryRef = useRef<{ key: string; timestamp: number } | null>(null);
-  const breakoutRef = useRef<BreakoutState>({
-    prices: [],
-    previousPrice: null,
+  const indicatorRef = useRef<IndicatorState>({
+    fast: null,
+    slow: null,
+    signal: null,
+    ticks: 0,
+    previousHistogram: null,
     lastTickIdentity: null,
   });
 
   useEffect(() => {
     let active = true;
     const appendEntry = (message: string, level: ConsoleEntry["level"] = "info", time = new Date()) => {
-      if (!active || !isBotRunningRef.current) return;
-      const key = `${level}:${message}`;
-      const now = Date.now();
-      if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 1000) return;
-      recentEntryRef.current = { key, timestamp: now };
+      if (!active) return;
       const entry: ConsoleEntry = {
         id: nextIdRef.current++,
         time: time.toLocaleTimeString(),
@@ -62,19 +64,26 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
 
+    appendEntry(`Connecting to the public ${MARKET_SYMBOL} market feed.`);
     const transport = new DerivMarketTransport(
       (status) => {
         if (!active) return;
         if (status === "Reconnecting" || status === "Unavailable") {
-          breakoutRef.current = {
-            prices: [],
-            previousPrice: null,
+          indicatorRef.current = {
+            fast: null,
+            slow: null,
+            signal: null,
+            ticks: 0,
+            previousHistogram: null,
             lastTickIdentity: null,
           };
           onMarketSignal?.({
             price: 0,
+            macd: 0,
+            signal: 0,
+            bias: "neutral",
             ready: false,
-            tradeSignal: null,
+            crossover: null,
           });
         }
         onFeedStatus?.(status);
@@ -92,7 +101,7 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       { symbol: MARKET_SYMBOL },
       (quote: DerivMarketQuote) => {
         const price = quote.Close;
-        const state = breakoutRef.current;
+        const state = indicatorRef.current;
         const tickId = quote.tick?.id;
         const tickEpoch = quote.tick?.epoch;
         const tickIdentity = tickId !== undefined
@@ -100,28 +109,36 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
           : `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
-        const ready = state.prices.length >= BREAKOUT_LOOKBACK_TICKS;
-        const rangeHigh = ready ? Math.max(...state.prices) : null;
-        const rangeLow = ready ? Math.min(...state.prices) : null;
-        const tradeSignal = ready && state.previousPrice !== null && rangeHigh !== null && rangeLow !== null
-          ? state.previousPrice <= rangeHigh && price > rangeHigh
-            ? "CALL"
-            : state.previousPrice >= rangeLow && price < rangeLow
-              ? "PUT"
-              : null
-          : null;
-        state.prices.push(price);
-        if (state.prices.length > BREAKOUT_LOOKBACK_TICKS) state.prices.shift();
-        state.previousPrice = price;
+        state.fast = state.fast === null ? price : state.fast + (2 / 13) * (price - state.fast);
+        state.slow = state.slow === null ? price : state.slow + (2 / 27) * (price - state.slow);
+        const macd = state.fast - state.slow;
+        state.signal = state.signal === null ? macd : state.signal + (2 / 10) * (macd - state.signal);
+        state.ticks += 1;
+        const ready = state.ticks >= INDICATOR_WARMUP_TICKS;
+        const histogram = macd - state.signal;
+        const crossover = ready && state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
+          ? "CALL"
+          : ready && state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
+            ? "PUT"
+            : null;
+        state.previousHistogram = histogram;
+        const bias = histogram > 0 ? "bullish" : histogram < 0 ? "bearish" : "neutral";
+
+        if (ready && state.ticks % SCAN_INTERVAL === 0) {
+          appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
+        }
 
         onMarketSignal?.({
           price,
+          macd,
+          signal: state.signal,
+          bias,
           ready,
-          tradeSignal,
+          crossover,
         });
 
-        if (ready && tradeSignal) {
-          appendEntry(`Signal · ${tradeSignal === "CALL" ? "BUY" : "SELL"}`, tradeSignal === "CALL" ? "bullish" : "bearish", quote.DT);
+        if (ready && crossover) {
+          appendEntry(`Signal · ${crossover === "CALL" ? "BUY" : "SELL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
         }
       },
     );
@@ -132,37 +149,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       transport.close();
     };
   }, [onFeedStatus, onMarketSignal]);
-
-  useEffect(() => {
-    if (!isBotRunning) return;
-    const logMarketStatus = () => {
-      const { prices } = breakoutRef.current;
-      const level: ConsoleEntry["level"] = prices.length < BREAKOUT_LOOKBACK_TICKS
-        ? "neutral"
-        : prices[prices.length - 1] > prices[0]
-          ? "bullish"
-          : prices[prices.length - 1] < prices[0]
-            ? "bearish"
-            : "neutral";
-      const message = prices.length < BREAKOUT_LOOKBACK_TICKS
-        ? `Price action · ${MARKET_SYMBOL} · collecting range ${prices.length}/${BREAKOUT_LOOKBACK_TICKS} ticks`
-        : `Price action · ${MARKET_SYMBOL} · ${prices[prices.length - 1].toFixed(2)} · Support ${Math.min(...prices).toFixed(2)} · Resistance ${Math.max(...prices).toFixed(2)} · ${level === "bullish" ? "Bullish" : level === "bearish" ? "Bearish" : "Neutral"}`;
-      const key = `${level}:${message}`;
-      const now = Date.now();
-      if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 900) return;
-      recentEntryRef.current = { key, timestamp: now };
-      const entry: ConsoleEntry = {
-        id: nextIdRef.current++,
-        time: new Date(now).toLocaleTimeString(),
-        message,
-        level,
-      };
-      setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
-    };
-    logMarketStatus();
-    const intervalId = window.setInterval(logMarketStatus, 1000);
-    return () => window.clearInterval(intervalId);
-  }, [isBotRunning]);
 
   useEffect(() => {
     entriesRef.current?.scrollTo({ top: 0 });

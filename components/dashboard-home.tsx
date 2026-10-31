@@ -11,15 +11,19 @@ import {
   Clock3,
   Home,
   LogOut,
-  ShieldAlert,
   Settings2,
-  Sparkles,
-  Trophy,
   X,
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
 import { RobotLogo } from "@/components/robot-logo";
+import {
+  SettingsPage,
+  type AppSubscription,
+  type SubscriptionPayment,
+  type SubscriptionPaymentRecord,
+} from "@/components/settings-page";
+import { supabase } from "@/lib/supabase";
 
 type DerivAccount = {
   accountId: string;
@@ -66,13 +70,6 @@ type TradeErrorToast = {
   message: string;
 };
 
-type SessionLimitNotice = {
-  id: number;
-  outcome: "profit" | "loss";
-  profit: number;
-  limit: number;
-};
-
 type BotRuntime = {
   running: boolean;
   inFlight: boolean;
@@ -84,9 +81,19 @@ type BotRuntime = {
 
 type DashboardHomeProps = {
   email: string;
+  accountId: string;
+  username: string;
   socketOnline: boolean;
   onSignOut: () => void;
 };
+
+async function getSupabaseAccessToken() {
+  if (!supabase) throw new Error("Supabase authentication is not configured.");
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  if (!data.session?.access_token) throw new Error("Sign in again to continue.");
+  return data.session.access_token;
+}
 
 function isTradeHistoryEntry(value: unknown): value is TradeHistoryEntry {
   if (!value || typeof value !== "object") return false;
@@ -110,20 +117,7 @@ function isTradeHistoryEntry(value: unknown): value is TradeHistoryEntry {
   );
 }
 
-function formatTradeAmount(value: number, currency: string) {
-  try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  } catch {
-    return `${value.toFixed(2)} ${currency}`;
-  }
-}
-
-export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeProps) {
+export function DashboardHome({ email, accountId, username, socketOnline, onSignOut }: DashboardHomeProps) {
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
   const [derivBusy, setDerivBusy] = useState(true);
@@ -137,9 +131,16 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
   const [tradeErrorToast, setTradeErrorToast] = useState<TradeErrorToast | null>(null);
-  const [sessionLimitNotice, setSessionLimitNotice] = useState<SessionLimitNotice | null>(null);
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
-  const [activeView, setActiveView] = useState<"home" | "signals" | "history">("home");
+  const [activeView, setActiveView] = useState<"home" | "signals" | "history" | "settings">("home");
+  const [subscription, setSubscription] = useState<AppSubscription | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(true);
+  const [subscriptionError, setSubscriptionError] = useState("");
+  const [subscriptionPayment, setSubscriptionPayment] = useState<SubscriptionPayment | null>(null);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentHistory, setPaymentHistory] = useState<SubscriptionPaymentRecord[]>([]);
+  const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(true);
+  const [paymentHistoryError, setPaymentHistoryError] = useState("");
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
   const [historyReady, setHistoryReady] = useState(false);
   const [historyAccountId, setHistoryAccountId] = useState("");
@@ -170,6 +171,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const tradeToastTimerRef = useRef<number | null>(null);
   const tradeToastIdRef = useRef(0);
   const balanceRefreshRef = useRef(false);
+  const subscriptionRefreshRef = useRef(false);
   const botRuntimeRef = useRef<BotRuntime>({
     running: false,
     inFlight: false,
@@ -206,6 +208,144 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setDerivBusy(false);
     }
   }, []);
+
+  const refreshPaymentHistory = useCallback(async (accessToken?: string) => {
+    try {
+      const token = accessToken ?? await getSupabaseAccessToken();
+      const response = await fetch("/api/subscription/payments", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await response.json() as {
+        payments?: SubscriptionPaymentRecord[];
+        error?: unknown;
+      };
+      if (!response.ok || !Array.isArray(result.payments)) {
+        throw new Error(typeof result.error === "string" ? result.error : "Could not load payment history.");
+      }
+      setPaymentHistory(result.payments);
+      setPaymentHistoryError("");
+    } catch (error) {
+      setPaymentHistoryError(error instanceof Error ? error.message : "Could not load payment history.");
+    } finally {
+      setPaymentHistoryLoading(false);
+    }
+  }, []);
+
+  const refreshSubscription = useCallback(async () => {
+    if (subscriptionRefreshRef.current) return;
+    subscriptionRefreshRef.current = true;
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/account", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const result = await response.json() as {
+        subscription?: AppSubscription;
+        error?: unknown;
+      };
+      if (!response.ok || !result.subscription) {
+        throw new Error(typeof result.error === "string" ? result.error : "Could not load subscription status.");
+      }
+      setSubscription(result.subscription);
+      setSubscriptionError("");
+      if (result.subscription.enabled) {
+        void refreshPaymentHistory(accessToken);
+      } else {
+        setPaymentHistory([]);
+        setPaymentHistoryError("");
+        setPaymentHistoryLoading(false);
+      }
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "Could not load subscription status.");
+    } finally {
+      setSubscriptionLoading(false);
+      subscriptionRefreshRef.current = false;
+    }
+  }, [refreshPaymentHistory]);
+
+  useEffect(() => {
+    void refreshSubscription();
+    const intervalId = window.setInterval(() => void refreshSubscription(), 30_000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshSubscription]);
+
+  useEffect(() => {
+    const paymentId = subscriptionPayment?.paymentId;
+    if (!paymentId || ["finished", "failed", "refunded", "expired"].includes(subscriptionPayment.status)) return;
+    let active = true;
+    const refreshPayment = async () => {
+      try {
+        const accessToken = await getSupabaseAccessToken();
+        const response = await fetch(`/api/subscription/payments/${encodeURIComponent(paymentId)}`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const result = await response.json() as {
+          status?: unknown;
+          expiresAt?: unknown;
+          subscriptionExpiresAt?: unknown;
+          error?: unknown;
+        };
+        if (!response.ok || typeof result.status !== "string") {
+          throw new Error(typeof result.error === "string" ? result.error : "Could not check payment status.");
+        }
+        if (!active) return;
+        setSubscriptionPayment((current) => current?.paymentId === paymentId
+          ? {
+              ...current,
+              status: result.status as string,
+              expiresAt: typeof result.expiresAt === "string" ? result.expiresAt : current.expiresAt,
+            }
+          : current);
+        if (typeof result.subscriptionExpiresAt === "string") {
+          setSubscription({
+            enabled: true,
+            active: Date.parse(result.subscriptionExpiresAt) > Date.now(),
+            expiresAt: result.subscriptionExpiresAt,
+          });
+        }
+        if (result.status === "finished") void refreshPaymentHistory();
+        setSubscriptionError("");
+      } catch (error) {
+        if (active) {
+          setSubscriptionError(error instanceof Error ? error.message : "Could not check payment status.");
+        }
+      }
+    };
+    void refreshPayment();
+    const intervalId = window.setInterval(() => void refreshPayment(), 5_000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [refreshPaymentHistory, subscriptionPayment?.paymentId, subscriptionPayment?.status]);
+
+  const handleSubscribe = async () => {
+    setPaymentBusy(true);
+    setSubscriptionError("");
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/subscription/payments", {
+        method: "POST",
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const result = await response.json() as SubscriptionPayment & { error?: unknown };
+      if (!response.ok) {
+        throw new Error(typeof result.error === "string" ? result.error : "Could not prepare payment.");
+      }
+      if (!result.paymentId || !result.payAddress || !Number.isFinite(result.payAmount)) {
+        throw new Error("Payment instructions were incomplete. Please try again.");
+      }
+      setSubscriptionPayment(result);
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "Could not prepare payment.");
+    } finally {
+      setPaymentBusy(false);
+    }
+  };
 
   const refreshDerivAccounts = useCallback(async () => {
     if (balanceRefreshRef.current || botRuntimeRef.current.inFlight) return;
@@ -329,6 +469,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         setBalanceRefreshError(
           typeof message.error === "string" ? message.error : "Live balance updates are unavailable.",
         );
+        source.close();
         return;
       }
       const accountId = message.accountId;
@@ -420,15 +561,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     }
   }, []);
 
-  useEffect(() => {
-    if (!sessionLimitNotice) return;
-    const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSessionLimitNotice(null);
-    };
-    document.addEventListener("keydown", dismissOnEscape);
-    return () => document.removeEventListener("keydown", dismissOnEscape);
-  }, [sessionLimitNotice]);
-
   const notifyTradeError = useCallback((message: string) => {
     if (tradeToastTimerRef.current !== null) {
       window.clearTimeout(tradeToastTimerRef.current);
@@ -439,16 +571,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setTradeErrorToast((current) => current?.id === id ? null : current);
       tradeToastTimerRef.current = null;
     }, 8000);
-  }, []);
-
-  const showSessionLimitNotice = useCallback((outcome: SessionLimitNotice["outcome"]) => {
-    const config = botConfigRef.current;
-    setSessionLimitNotice({
-      id: Date.now(),
-      outcome,
-      profit: botRuntimeRef.current.sessionProfit,
-      limit: outcome === "profit" ? config.targetProfit : config.targetLoss,
-    });
   }, []);
 
   const handleFeedStatus = useCallback((status: typeof marketFeedStatus) => {
@@ -462,7 +584,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       !runtime.running ||
       runtime.inFlight ||
       marketFeedStatusRef.current !== "Live" ||
-      !signal.tradeSignal
+      !signal.crossover
     ) return;
 
     const config = botConfigRef.current;
@@ -470,9 +592,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       runtime.running = false;
       runtime.sessionLimitReached = true;
       setBotRunning(false);
-      const outcome = runtime.sessionProfit >= config.targetProfit ? "profit" : "loss";
-      setBotStatus(outcome === "profit" ? "Session profit target reached" : "Session loss limit reached");
-      showSessionLimitNotice(outcome);
+      setBotStatus(runtime.sessionProfit >= config.targetProfit ? "Session profit target reached" : "Session loss limit reached");
       return;
     }
 
@@ -484,23 +604,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return;
     }
 
-    const contractType = signal.tradeSignal;
+    const contractType = signal.crossover;
     const stake = runtime.nextStake ?? config.stakeAmount;
-    if (stake < 1) {
-      runtime.running = false;
-      setBotRunning(false);
-      setBotStatus("Minimum stake is $1. Update your stake before starting.");
-      notifyTradeError("The minimum stake is $1. Update your bot stake before trading.");
-      return;
-    }
-    if (stake > account.balance) {
-      runtime.running = false;
-      setBotRunning(false);
-      const message = `Insufficient balance: ${formatTradeAmount(account.balance, account.currency)} available, but the next stake is ${formatTradeAmount(stake, account.currency)}. The bot was stopped.`;
-      setBotStatus(message);
-      notifyTradeError(message);
-      return;
-    }
 
     runtime.inFlight = true;
     setTradeInProgress(true);
@@ -509,18 +614,23 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     setBotStatus(`${contractType === "CALL" ? "BUY" : "SELL"} · trade in progress`);
     void (async () => {
       try {
-        const response = await fetch("/api/deriv/bot-trade", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accountId: account.accountId,
-            contractType,
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/deriv/bot-trade", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          accountId: account.accountId,
+          contractType,
             stake,
           }),
         });
         if (!response.ok) {
           const result = await response.json() as {
             error?: unknown;
+            code?: unknown;
             tradeMayBeOpen?: unknown;
           };
           const tradeMayBeOpen = result.tradeMayBeOpen === true;
@@ -532,6 +642,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           const errorMessage = typeof result.error === "string"
             ? result.error
             : "Trade failed. The bot was stopped.";
+          if (result.code === "SUBSCRIPTION_REQUIRED") {
+            setActiveView("settings");
+            void refreshSubscription();
+          }
           notifyTradeError(errorMessage);
           setBotStatus(
             tradeMayBeOpen
@@ -686,13 +800,11 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session profit target reached");
-          showSessionLimitNotice("profit");
         } else if (runtime.sessionProfit <= -botConfigRef.current.targetLoss) {
           runtime.running = false;
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session loss limit reached");
-          showSessionLimitNotice("loss");
         } else {
           setBotStatus(
             runtime.running
@@ -719,7 +831,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         if (!runtime.inFlight) void refreshDerivAccounts();
       }
     })();
-  }, [notifyTradeError, refreshDerivAccounts, showSessionLimitNotice]);
+  }, [notifyTradeError, refreshDerivAccounts, refreshSubscription]);
 
   const disconnectDeriv = async () => {
     botRuntimeRef.current.running = false;
@@ -745,6 +857,12 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
   const handleStartBot = () => {
     const runtime = botRuntimeRef.current;
+    if (subscriptionLoading) return;
+    if (subscription?.enabled && !subscription.active) {
+      setBotStatus("An active subscription is required. Subscribe in Settings.");
+      setActiveView("settings");
+      return;
+    }
     if (
       !derivConnected ||
       !selectedDerivAccount ||
@@ -752,21 +870,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       runtime.inFlight ||
       runtime.unresolvedTrade
     ) return;
-    const nextStake = runtime.sessionLimitReached
-      ? botConfig.stakeAmount
-      : runtime.nextStake ?? botConfig.stakeAmount;
-    if (nextStake < 1) {
-      const message = "The minimum stake is $1. Update your bot stake before starting.";
-      setBotStatus(message);
-      notifyTradeError(message);
-      return;
-    }
-    if (nextStake > selectedDerivAccount.balance) {
-      const message = `Insufficient balance: ${formatTradeAmount(selectedDerivAccount.balance, selectedDerivAccount.currency)} available, but the next stake is ${formatTradeAmount(nextStake, selectedDerivAccount.currency)}.`;
-      setBotStatus(message);
-      notifyTradeError(message);
-      return;
-    }
     if (runtime.sessionLimitReached) {
       runtime.sessionProfit = 0;
       runtime.nextStake = botConfig.stakeAmount;
@@ -826,6 +929,18 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return `${value.toFixed(2)} ${currency}`;
     }
   };
+  const formatTradeAmount = (value: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch {
+      return `${value.toFixed(2)} ${currency}`;
+    }
+  };
   const decidedTrades = performance.wins + performance.losses;
   const hasReliableWinRate = decidedTrades >= 5;
   const winRate = hasReliableWinRate
@@ -849,59 +964,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
   return (
     <main className="dashboard-shell">
-      {sessionLimitNotice && (
-        <div
-          className={`session-limit-overlay session-limit-${sessionLimitNotice.outcome}`}
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="session-limit-title"
-          aria-describedby="session-limit-description"
-          key={sessionLimitNotice.id}
-        >
-          <section className="session-limit-card">
-            <button
-              type="button"
-              className="session-limit-close"
-              aria-label="Dismiss session result"
-              onClick={() => setSessionLimitNotice(null)}
-            >
-              <X size={18} aria-hidden="true" />
-            </button>
-            <div className="session-limit-icon" aria-hidden="true">
-              {sessionLimitNotice.outcome === "profit"
-                ? <Trophy size={34} />
-                : <ShieldAlert size={34} />}
-              {sessionLimitNotice.outcome === "profit" && (
-                <Sparkles className="session-limit-sparkle" size={18} />
-              )}
-            </div>
-            <p className="session-limit-eyebrow">BOT SESSION COMPLETE</p>
-            <h2 id="session-limit-title">
-              {sessionLimitNotice.outcome === "profit" ? "Congratulations!" : "Risk limit reached"}
-            </h2>
-            <p id="session-limit-description" className="session-limit-message">
-              {sessionLimitNotice.outcome === "profit"
-                ? "Your profit target was reached. The bot has stopped trading."
-                : "Your loss limit was reached. The bot has stopped trading to protect your account."}
-            </p>
-            <p className="session-limit-threshold">
-              {sessionLimitNotice.outcome === "profit" ? "Profit target" : "Loss limit"}{" "}
-              {formatTradeAmount(sessionLimitNotice.limit, selectedDerivAccount?.currency ?? "USD")}
-            </p>
-            <div className="session-limit-result">
-              <span>Session P/L</span>
-              <strong>{formatTradeAmount(sessionLimitNotice.profit, selectedDerivAccount?.currency ?? "USD")}</strong>
-            </div>
-            <button
-              type="button"
-              className="session-limit-dismiss"
-              onClick={() => setSessionLimitNotice(null)}
-            >
-              Continue
-            </button>
-          </section>
-        </div>
-      )}
       {tradeErrorToast && (
         <div className="trade-error-toast" role="alert" key={tradeErrorToast.id}>
           <AlertTriangle size={18} aria-hidden="true" />
@@ -1010,7 +1072,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       </header>
 
       <section
-        className={`dashboard-content ${activeView === "signals" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
+        className={`dashboard-content ${activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
         aria-label="Dashboard pages"
       >
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
@@ -1026,11 +1088,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               </span>
             </div>
 
-            <MarketConsole
-              isBotRunning={botRunning}
-              onMarketSignal={handleMarketSignal}
-              onFeedStatus={handleFeedStatus}
-            />
+            <MarketConsole onMarketSignal={handleMarketSignal} onFeedStatus={handleFeedStatus} />
 
             <section
               className="performance-panel"
@@ -1122,7 +1180,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   type="button"
                   className="bot-start-button"
                   onClick={handleStartBot}
-                  disabled={!derivConnected || !selectedDerivAccount || derivBusy || botRunning || marketFeedStatus !== "Live" || botRuntimeRef.current.unresolvedTrade}
+                  disabled={!derivConnected || !selectedDerivAccount || derivBusy || botRunning || marketFeedStatus !== "Live" || botRuntimeRef.current.unresolvedTrade || subscriptionLoading || (subscription?.enabled === true && !subscription.active)}
                   title={botRuntimeRef.current.unresolvedTrade ? "Check Deriv open positions before starting again" : undefined}
                 >
                   Start bot
@@ -1212,6 +1270,22 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             )}
           </section>
         </div>
+        <div className="dashboard-settings-view" id="dashboard-settings-view" hidden={activeView !== "settings"}>
+          <SettingsPage
+            accountId={accountId}
+            username={username}
+            email={email}
+            subscription={subscription}
+            subscriptionLoading={subscriptionLoading}
+            subscriptionError={subscriptionError}
+            payment={subscriptionPayment}
+            paymentHistory={paymentHistory}
+            paymentHistoryLoading={paymentHistoryLoading}
+            paymentHistoryError={paymentHistoryError}
+            paymentBusy={paymentBusy}
+            onSubscribe={() => void handleSubscribe()}
+          />
+        </div>
       </section>
 
       <nav className="dashboard-bottom-nav" aria-label="Main navigation">
@@ -1224,7 +1298,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         <button type="button" className={`bottom-nav-item ${activeView === "history" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("history")} aria-current={activeView === "history" ? "page" : undefined} aria-controls="dashboard-history-view">
           <Clock3 size={19} /><span>History</span>
         </button>
-        <button type="button" className="bottom-nav-item" disabled aria-label="Settings coming soon">
+        <button type="button" className={`bottom-nav-item ${activeView === "settings" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("settings")} aria-current={activeView === "settings" ? "page" : undefined} aria-controls="dashboard-settings-view">
           <Settings2 size={19} /><span>Settings</span>
         </button>
       </nav>

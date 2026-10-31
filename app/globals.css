@@ -4,8 +4,8 @@
 
 :root {
   color-scheme: light;
-  --lavender: #effaf6;
-  --cobalt: #168c7a;
+  --lavender: #edf4ff;
+  --cobalt: #2539a5;
   --ink: #17213a;
   --phone-bg: #ffffff;
   --app-surface: #ffffff;
@@ -39,7 +39,7 @@ input {
 }
 
 ::selection {
-  background: #d6f3e8;
+  background: #dce2ff;
   color: var(--cobalt);
 }
 
@@ -159,156 +159,6 @@ input {
   background: #fff1ef;
 }
 
-.session-limit-overlay {
-  position: fixed;
-  z-index: 30;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  overflow: auto;
-  padding: max(20px, env(safe-area-inset-top)) 18px max(20px, env(safe-area-inset-bottom));
-  background: rgb(20 30 42 / 38%);
-  backdrop-filter: blur(7px);
-  animation: session-limit-overlay-enter 260ms ease-out both;
-}
-
-.session-limit-card {
-  position: relative;
-  width: min(390px, 100%);
-  overflow: hidden;
-  border: 1px solid rgb(255 255 255 / 72%);
-  border-radius: 24px;
-  padding: 32px 24px 24px;
-  background: rgb(255 255 255 / 88%);
-  box-shadow: 0 24px 80px rgb(18 31 44 / 24%);
-  text-align: center;
-  backdrop-filter: blur(18px);
-  animation: session-limit-card-enter 440ms cubic-bezier(.2, .8, .2, 1) both;
-}
-
-.session-limit-profit .session-limit-card {
-  background: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(232 250 242 / 88%));
-}
-
-.session-limit-loss .session-limit-card {
-  background: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 241 238 / 90%));
-}
-
-.session-limit-close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: rgb(255 255 255 / 72%);
-  color: #647286;
-  cursor: pointer;
-}
-
-.session-limit-icon {
-  position: relative;
-  display: grid;
-  width: 76px;
-  height: 76px;
-  place-items: center;
-  margin: 0 auto 17px;
-  border: 1px solid rgb(22 140 122 / 22%);
-  border-radius: 50%;
-  background: rgb(214 243 232 / 78%);
-  color: #168c7a;
-  animation: session-limit-icon-pop 600ms cubic-bezier(.2, .8, .2, 1) both;
-}
-
-.session-limit-loss .session-limit-icon {
-  border-color: rgb(200 80 80 / 20%);
-  background: rgb(255 230 226 / 76%);
-  color: #bd5651;
-}
-
-.session-limit-sparkle {
-  position: absolute;
-  top: -3px;
-  right: -2px;
-  color: #c28a24;
-  animation: session-limit-sparkle 1.5s ease-in-out infinite;
-}
-
-.session-limit-eyebrow {
-  margin: 0 0 7px;
-  color: #718092;
-  font-size: 9px;
-  font-weight: 750;
-  letter-spacing: .16em;
-}
-
-.session-limit-card h2 {
-  margin: 0;
-  color: #17213a;
-  font-size: 25px;
-  letter-spacing: -.04em;
-}
-
-.session-limit-message {
-  max-width: 290px;
-  margin: 9px auto 10px;
-  color: #627084;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.session-limit-threshold {
-  margin: 0 0 16px;
-  color: #7a8798;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.session-limit-result {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid rgb(118 137 151 / 15%);
-  border-radius: 12px;
-  padding: 12px 14px;
-  background: rgb(255 255 255 / 66%);
-  color: #68778a;
-  font-size: 11px;
-}
-
-.session-limit-result strong {
-  color: #168c7a;
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-}
-
-.session-limit-loss .session-limit-result strong {
-  color: #bd5651;
-}
-
-.session-limit-dismiss {
-  width: 100%;
-  min-height: 42px;
-  margin-top: 16px;
-  border: 0;
-  border-radius: 11px;
-  background: #168c7a;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 160ms ease, transform 160ms ease;
-}
-
-.session-limit-dismiss:hover {
-  background: #117968;
-  transform: translateY(-1px);
-}
-
 .dashboard-header {
   z-index: 2;
   display: flex;
@@ -342,7 +192,7 @@ input {
   flex: none;
   place-items: center;
   color: #fff;
-  background: #168c7a;
+  background: #2539a5;
 }
 
 .dashboard-brand-icon {
@@ -913,7 +763,8 @@ input {
 }
 
 .dashboard-config-view,
-.dashboard-history-view {
+.dashboard-history-view,
+.dashboard-settings-view {
   width: 100%;
 }
 
@@ -923,7 +774,8 @@ input {
   overflow: hidden;
 }
 
-.dashboard-content-scroll .dashboard-config-view {
+.dashboard-content-scroll .dashboard-config-view,
+.dashboard-content-scroll .dashboard-settings-view {
   flex: 0 0 auto;
   min-height: 100%;
   overflow: visible;
@@ -931,8 +783,382 @@ input {
 
 .dashboard-home-view[hidden],
 .dashboard-config-view[hidden],
-.dashboard-history-view[hidden] {
+.dashboard-history-view[hidden],
+.dashboard-settings-view[hidden] {
   display: none;
+}
+
+.settings-page {
+  display: grid;
+  width: min(100%, 720px);
+  gap: 12px;
+  margin: 0 auto;
+  padding: 2px 0 24px;
+}
+
+.settings-page-heading {
+  padding: 2px 2px 4px;
+}
+
+.settings-page-heading h1 {
+  margin: 0;
+  color: #17213a;
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+}
+
+.settings-page-heading p {
+  margin: 5px 0 0;
+  color: #6f7b8b;
+  font-size: 12px;
+}
+
+.settings-card {
+  min-width: 0;
+  border: 1px solid #e8edf0;
+  border-radius: 17px;
+  background: #fff;
+  padding: 16px;
+  box-shadow: 0 5px 18px rgb(22 37 53 / 4%);
+}
+
+.settings-card-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-heading-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: 12px;
+  background: #eaf5ef;
+  color: #16845a;
+}
+
+.settings-card-heading > div:last-of-type {
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-card-heading h2 {
+  margin: 0;
+  color: #243248;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-card-heading p {
+  margin: 3px 0 0;
+  color: #8792a0;
+  font-size: 10px;
+}
+
+.profile-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.profile-avatar {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(23 33 58 / 5%);
+  border-radius: 17px;
+}
+
+.profile-name {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.profile-name strong {
+  overflow: hidden;
+  color: #243248;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-name span {
+  overflow: hidden;
+  color: #768292;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-account-id {
+  display: grid;
+  gap: 5px;
+  margin-top: 16px;
+  border-top: 1px solid #edf0f2;
+  padding-top: 12px;
+}
+
+.profile-account-id > span,
+.payment-address-label {
+  color: #8792a0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.profile-account-id code {
+  overflow-wrap: anywhere;
+  color: #526174;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10px;
+  user-select: text;
+}
+
+.subscription-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.subscription-badge-active {
+  background: #e9f7ef;
+  color: #17764e;
+}
+
+.subscription-badge-expired {
+  background: #fff1e9;
+  color: #a45b2a;
+}
+
+.subscription-expiry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 15px;
+  color: #4a586a;
+  font-size: 11px;
+}
+
+.subscription-expiry svg {
+  flex: none;
+  color: #16845a;
+}
+
+.subscription-duration-note,
+.subscription-payment-description {
+  margin: 10px 0 0;
+  color: #788493;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.subscription-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 17px;
+}
+
+.subscription-price strong {
+  color: #19273b;
+  font-size: 27px;
+  letter-spacing: -0.05em;
+}
+
+.subscription-price span {
+  color: #7e8997;
+  font-size: 11px;
+}
+
+.subscription-start-button,
+.payment-copy-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 12px;
+  background: #16845a;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.subscription-start-button {
+  width: 100%;
+  margin-top: 15px;
+}
+
+.subscription-start-button:hover,
+.payment-copy-button:hover {
+  background: #126d4a;
+}
+
+.subscription-start-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.settings-error {
+  margin: 10px 0 0;
+  border-radius: 9px;
+  background: #fff1ef;
+  padding: 9px 10px;
+  color: #ad453d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.payment-instructions {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+  border: 1px solid #e9eeeb;
+  border-radius: 13px;
+  background: #fbfdfc;
+  padding: 12px;
+}
+
+.payment-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #647184;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.payment-status-finished {
+  color: #17764e;
+}
+
+.payment-status-failed,
+.payment-status-expired,
+.payment-status-refunded,
+.payment-status-partially_paid {
+  color: #a45b2a;
+}
+
+.payment-amount {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #edf1ef;
+  padding-top: 10px;
+}
+
+.payment-amount span {
+  color: #788493;
+  font-size: 10px;
+}
+
+.payment-amount strong {
+  color: #243248;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-network,
+.payment-safety-note {
+  color: #788493;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.payment-address {
+  overflow-wrap: anywhere;
+  border: 1px solid #e6ebe8;
+  border-radius: 9px;
+  background: #fff;
+  padding: 9px;
+  color: #435367;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.payment-copy-button {
+  min-height: 36px;
+  justify-self: start;
+  padding: 0 12px;
+  font-size: 10px;
+}
+
+.payment-safety-note {
+  margin: 0;
+}
+
+.payment-history-card {
+  display: grid;
+  gap: 12px;
+}
+
+.payment-history-empty {
+  margin: 0;
+  color: #788493;
+  font-size: 10px;
+}
+
+.payment-history-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.payment-history-item {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border-top: 1px solid #edf0f2;
+  padding-top: 10px;
+}
+
+.payment-history-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.payment-history-main strong {
+  color: #243248;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.payment-history-date {
+  color: #788493;
+  font-size: 9px;
+}
+
+.payment-history-id {
+  overflow-wrap: anywhere;
+  color: #526174;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 9px;
+  user-select: text;
 }
 
 .history-panel {
@@ -1149,8 +1375,8 @@ input {
 }
 
 .signal-config-input:focus {
-  border-color: #168c7a;
-  outline: 3px solid rgb(22 140 122 / 10%);
+  border-color: #6879ce;
+  outline: 3px solid rgb(37 57 165 / 10%);
   background: #fff;
 }
 
@@ -1234,7 +1460,7 @@ input {
 }
 
 .bottom-nav-active {
-  color: #168c7a;
+  color: #2539a5;
 }
 
 .bottom-nav-item:disabled {
@@ -1248,7 +1474,7 @@ input {
     min-height: min(640px, calc(100dvh - 56px));
     border: 7px solid rgba(255, 255, 255, 0.92);
     border-radius: 24px;
-    box-shadow: 0 24px 70px rgba(22, 140, 122, 0.18);
+    box-shadow: 0 24px 70px rgba(37, 57, 165, 0.18);
   }
 
   .dashboard-content {
@@ -1299,53 +1525,6 @@ input {
   }
 }
 
-@keyframes session-limit-overlay-enter {
-  from {
-    opacity: 0;
-    backdrop-filter: blur(0);
-  }
-  to {
-    opacity: 1;
-    backdrop-filter: blur(7px);
-  }
-}
-
-@keyframes session-limit-card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(18px) scale(.94);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes session-limit-icon-pop {
-  0% {
-    opacity: 0;
-    transform: scale(.55) rotate(-12deg);
-  }
-  70% {
-    transform: scale(1.1) rotate(3deg);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) rotate(0);
-  }
-}
-
-@keyframes session-limit-sparkle {
-  0%, 100% {
-    opacity: .55;
-    transform: scale(.8) rotate(-12deg);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.15) rotate(12deg);
-  }
-}
-
 @keyframes performance-value-update {
   0% {
     opacity: 0.45;
@@ -1376,17 +1555,6 @@ input {
   .rate-ring,
   .trade-error-toast {
     animation: none;
-    transition: none;
-  }
-
-  .session-limit-overlay,
-  .session-limit-card,
-  .session-limit-icon,
-  .session-limit-sparkle {
-    animation: none;
-  }
-
-  .session-limit-dismiss {
     transition: none;
   }
 }

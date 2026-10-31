@@ -14,7 +14,13 @@ Open [http://localhost:3000](http://localhost:3000). On wider screens the app re
 
 ## Supabase setup
 
-Add your project URL and anon key to `.env.local` as `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Run [supabase/schema.sql](supabase/schema.sql) in the Supabase SQL editor to create the profiles table, row-level policies, and new-user profile trigger. Email/password sign-up, sign-in, and password reset use Supabase Auth.
+Add your project URL and anon key to `.env.local` as `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Run [supabase/schema.sql](supabase/schema.sql) in the Supabase SQL editor to create the profiles and subscription tables, row-level policies, payment records, activation function, and new-user profile trigger. Email/password sign-up, sign-in, and password reset use Supabase Auth.
+
+## Bot subscriptions and in-app payments
+
+Set `SUBSCRIPTIONS_ENABLED=false` to keep bot access free. Set it to `true` to require an active 12-hour subscription before trades can be placed. Each subscription costs $5 and is paid in USDT on TRC20. Users receive the payment address and exact amount inside Settings; the app does not redirect to NOWPayments or use its hosted checkout.
+
+For paid mode, set the server-only `SUPABASE_SERVICE_ROLE_KEY`, `NOWPAYMENTS_API_KEY`, and `NOWPAYMENTS_IPN_SECRET`, and set `NOWPAYMENTS_IPN_CALLBACK_URL` to the app's public HTTPS URL ending in `/api/nowpayments/ipn`. Never expose these secrets through `NEXT_PUBLIC_` variables. Run the updated `supabase/schema.sql` before enabling subscriptions. Access starts only after the server verifies NOWPayments' signed `finished` notification. Live payment activation requires the callback URL to be publicly reachable.
 
 ## Realtime and security
 
@@ -51,4 +57,4 @@ Build an APK or Android App Bundle from Android Studio. After changing the deplo
 
 ## Trading dashboard
 
-After Supabase sign-in, the home dashboard opens a full-width market console that streams public Volatility 100 tick data from Deriv's [public WebSocket API](https://developers.deriv.com/llms/ws-public.md) and displays MACD analysis. The console is read-only and does not place trades or require an app ID or account authorization. To link a Deriv account, set `DERIV_APP_ID` and `DERIV_REDIRECT_URI` as described above and register that exact callback URL in your Deriv app settings. The dashboard's **Connect** button redirects the user through Deriv's [OAuth 2.0 Authorization Code + PKCE flow](https://developers.deriv.com/llms/oauth.md), then handles the callback and exchanges the one-time authorization code on the server. The Deriv access token is kept in an HttpOnly cookie and is never exposed to browser JavaScript. Once connected, the dashboard header shows the selected account balance and a dropdown to switch between available demo and real accounts; a server-side Deriv WebSocket subscription updates the selected balance whenever it changes, with periodic refresh as a fallback.
+After Supabase sign-in, the home dashboard opens a full-width market console that streams public Volatility 100 tick data from Deriv's [public WebSocket API](https://developers.deriv.com/llms/ws-public.md). The console is read-only and does not place trades or require an app ID or account authorization. To link a Deriv account, set `DERIV_APP_ID` and `DERIV_REDIRECT_URI` as described above and register that exact callback URL in your Deriv app settings. The dashboard's **Connect** button redirects the user through Deriv's [OAuth 2.0 Authorization Code + PKCE flow](https://developers.deriv.com/llms/oauth.md), then handles the callback and exchanges the one-time authorization code on the server. The Deriv access token is kept in an HttpOnly cookie and is never exposed to browser JavaScript. Once connected, the dashboard header shows the selected account balance and a dropdown to switch between available demo and real accounts; a server-side Deriv WebSocket subscription updates the selected balance whenever it changes, with periodic refresh as a fallback.

@@ -34,6 +34,8 @@ export function MobileAuth() {
   const [realtimeLatency, setRealtimeLatency] = useState<number | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [accountName, setAccountName] = useState("");
   const [splashComplete, setSplashComplete] = useState(false);
 
   useEffect(() => {
@@ -68,12 +70,24 @@ export function MobileAuth() {
         if (!session?.access_token) {
           setAuthenticated(false);
           setAccountEmail("");
+          setAccountId("");
+          setAccountName("");
           socket.disconnect();
           return;
         }
 
         setAuthenticated(true);
-        setAccountEmail(session.user.email ?? "");
+        const userEmail = session.user.email ?? "";
+        const metadataName = session.user.user_metadata.username
+          ?? session.user.user_metadata.full_name
+          ?? session.user.user_metadata.name;
+        setAccountEmail(userEmail);
+        setAccountId(session.user.id);
+        setAccountName(
+          typeof metadataName === "string" && metadataName.trim()
+            ? metadataName.trim()
+            : userEmail.split("@")[0] || "User",
+        );
         socket.auth = { accessToken: session.access_token };
         if (socket.connected) socket.disconnect();
         socket.connect();
@@ -83,7 +97,17 @@ export function MobileAuth() {
       void supabase.auth.getSession().then(({ data: sessionData, error }) => {
         if (error || !sessionData.session) return;
         setAuthenticated(true);
-        setAccountEmail(sessionData.session.user.email ?? "");
+        const userEmail = sessionData.session.user.email ?? "";
+        const metadataName = sessionData.session.user.user_metadata.username
+          ?? sessionData.session.user.user_metadata.full_name
+          ?? sessionData.session.user.user_metadata.name;
+        setAccountEmail(userEmail);
+        setAccountId(sessionData.session.user.id);
+        setAccountName(
+          typeof metadataName === "string" && metadataName.trim()
+            ? metadataName.trim()
+            : userEmail.split("@")[0] || "User",
+        );
         socket.auth = { accessToken: sessionData.session.access_token };
         socket.connect();
       });
@@ -164,6 +188,8 @@ export function MobileAuth() {
     return (
       <DashboardHome
         email={accountEmail}
+        accountId={accountId}
+        username={accountName}
         socketOnline={socketOnline}
         onSignOut={() => {
           void supabase?.auth.signOut();
