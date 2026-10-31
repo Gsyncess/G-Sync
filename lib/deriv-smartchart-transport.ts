@@ -59,6 +59,8 @@ type PendingRequest = {
 const subscriptionKey = (request: { symbol?: string; ticks_history?: string; granularity?: number }) =>
   `${request.symbol ?? request.ticks_history ?? ""}:${request.granularity ?? 0}`;
 
+const DERIV_PUBLIC_WEBSOCKET = "wss://api.derivws.com/trading/v1/options/ws/public";
+
 export class DerivSmartChartTransport {
   private socket: WebSocket | null = null;
   private nextRequestId = 1;
@@ -70,8 +72,8 @@ export class DerivSmartChartTransport {
   private opening: Promise<void> | null = null;
 
   constructor(
-    private readonly appId: string,
     private readonly onStatus: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void,
+    private readonly onError: (error: Error) => void,
   ) {
     this.connect();
   }
@@ -80,9 +82,7 @@ export class DerivSmartChartTransport {
     if (this.closed) return;
     this.onStatus(this.socket ? "Reconnecting" : "Connecting");
     this.opening = new Promise((resolve, reject) => {
-      const socket = new WebSocket(
-        `wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(this.appId)}`,
-      );
+      const socket = new WebSocket(DERIV_PUBLIC_WEBSOCKET);
       this.socket = socket;
       socket.onopen = () => {
         this.reconnectDelay = 1000;
@@ -239,8 +239,9 @@ export class DerivSmartChartTransport {
       } else if (response.subscription?.id) {
         void this.requestAPI({ forget: response.subscription.id }).catch(() => undefined);
       }
-    } catch {
+    } catch (error) {
       this.onStatus("Unavailable");
+      this.onError(error instanceof Error ? error : new Error("Deriv market subscription failed."));
     }
   }
 

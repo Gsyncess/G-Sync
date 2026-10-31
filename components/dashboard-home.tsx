@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   Bot,
@@ -12,6 +13,18 @@ import {
 } from "lucide-react";
 import { DerivSmartChart } from "@/components/deriv-smartchart";
 
+type DerivAccount = {
+  accountType: string;
+  currency: string;
+};
+
+type DerivSessionResponse = {
+  connected?: boolean;
+  expired?: boolean;
+  accounts?: DerivAccount[];
+  error?: string;
+};
+
 type DashboardHomeProps = {
   email: string;
   socketOnline: boolean;
@@ -19,6 +32,64 @@ type DashboardHomeProps = {
 };
 
 export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeProps) {
+  const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
+  const [derivConnected, setDerivConnected] = useState(false);
+  const [derivBusy, setDerivBusy] = useState(true);
+  const [derivMessage, setDerivMessage] = useState("");
+
+  const loadDerivSession = useCallback(async () => {
+    setDerivBusy(true);
+    try {
+      const response = await fetch("/api/deriv/session", { cache: "no-store" });
+      const result = (await response.json()) as DerivSessionResponse;
+      if (!response.ok) throw new Error(result.error ?? "Could not check the Deriv connection.");
+      setDerivConnected(result.connected === true);
+      setDerivAccounts(result.accounts ?? []);
+      if (result.expired) setDerivMessage("Your Deriv authorization expired. Please connect again.");
+    } catch (error) {
+      setDerivMessage(error instanceof Error ? error.message : "Could not check the Deriv connection.");
+    } finally {
+      setDerivBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const oauthResult = url.searchParams.get("deriv_oauth");
+    if (oauthResult) {
+      setDerivMessage(
+        oauthResult === "connected"
+          ? "Your Deriv account is connected."
+          : oauthResult === "cancelled"
+            ? "Deriv authorization was cancelled."
+            : "Deriv authorization failed. Please try again.",
+      );
+      url.searchParams.delete("deriv_oauth");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    void loadDerivSession();
+  }, [loadDerivSession]);
+
+  const disconnectDeriv = async () => {
+    setDerivBusy(true);
+    setDerivMessage("");
+    try {
+      const response = await fetch("/api/deriv/session/disconnect", { method: "POST" });
+      if (!response.ok) throw new Error("Could not disconnect the Deriv account.");
+      setDerivConnected(false);
+      setDerivAccounts([]);
+      setDerivMessage("Your Deriv account has been disconnected.");
+    } catch (error) {
+      setDerivMessage(error instanceof Error ? error.message : "Could not disconnect the Deriv account.");
+    } finally {
+      setDerivBusy(false);
+    }
+  };
+
+  const accountSummary = derivAccounts
+    .map(({ accountType, currency }) => [accountType, currency].filter(Boolean).join(" · "))
+    .join(", ");
+
   return (
     <main className="dashboard-shell">
       <header className="dashboard-header">
@@ -91,7 +162,30 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           </div>
           <div className="account-connect-row">
             <ShieldCheck size={15} />
-            <span>Connect a Deriv account to load verified results</span>
+            <div className="account-connect-content">
+              <span>
+                {derivBusy
+                  ? "Checking Deriv connection…"
+                  : derivConnected
+                    ? `Deriv connected${accountSummary ? ` · ${accountSummary}` : ""}`
+                    : "Connect Deriv to authorize your account"}
+              </span>
+              {derivMessage && <span className="deriv-account-message" role="status">{derivMessage}</span>}
+            </div>
+            {derivConnected ? (
+              <button
+                type="button"
+                className="deriv-connect-button"
+                onClick={() => void disconnectDeriv()}
+                disabled={derivBusy}
+              >
+                Disconnect
+              </button>
+            ) : (
+              <a className="deriv-connect-button" href="/api/deriv/oauth/start">
+                Connect
+              </a>
+            )}
           </div>
         </section>
 

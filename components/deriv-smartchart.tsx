@@ -11,17 +11,77 @@ import {
 
 type SmartChartsModule = typeof import("@deriv-com/smartcharts-champion");
 
-const DERIV_APP_ID = process.env.NEXT_PUBLIC_DERIV_APP_ID?.trim();
-
 type MarketChartData = {
   activeSymbols?: unknown[];
   tradingTimes?: Record<string, { isOpen: boolean; openTime: string; closeTime: string }>;
 };
 
+type DerivActiveSymbol = {
+  exchange_is_open: number;
+  display_name: string;
+  market: string;
+  market_display_name: string;
+  pip: number;
+  subgroup: string;
+  subgroup_display_name: string;
+  submarket: string;
+  submarket_display_name: string;
+  symbol: string;
+  symbol_type: string;
+};
+
+function displayMarketName(value: string) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeActiveSymbols(symbols: unknown[]): DerivActiveSymbol[] {
+  return symbols.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const symbol = item as {
+      exchange_is_open?: unknown;
+      market?: unknown;
+      pip_size?: unknown;
+      subgroup?: unknown;
+      submarket?: unknown;
+      underlying_symbol?: unknown;
+      underlying_symbol_name?: unknown;
+      underlying_symbol_type?: unknown;
+    };
+    if (
+      typeof symbol.underlying_symbol !== "string" ||
+      typeof symbol.underlying_symbol_name !== "string" ||
+      typeof symbol.underlying_symbol_type !== "string" ||
+      typeof symbol.market !== "string" ||
+      typeof symbol.subgroup !== "string" ||
+      typeof symbol.submarket !== "string" ||
+      typeof symbol.pip_size !== "number"
+    ) {
+      return [];
+    }
+
+    return [{
+      exchange_is_open: symbol.exchange_is_open === 1 ? 1 : 0,
+      display_name: symbol.underlying_symbol_name,
+      market: symbol.market,
+      market_display_name: displayMarketName(symbol.market),
+      pip: symbol.pip_size,
+      subgroup: symbol.subgroup,
+      subgroup_display_name: displayMarketName(symbol.subgroup),
+      submarket: symbol.submarket,
+      submarket_display_name: displayMarketName(symbol.submarket),
+      symbol: symbol.underlying_symbol,
+      symbol_type: symbol.underlying_symbol_type,
+    }];
+  });
+}
+
 export function DerivSmartChart() {
   const [sdk, setSdk] = useState<SmartChartsModule | null>(null);
   const [chartData, setChartData] = useState<MarketChartData | null>(null);
-  const [marketStatus, setMarketStatus] = useState("App ID required");
+  const [marketStatus, setMarketStatus] = useState("Connecting");
   const [marketError, setMarketError] = useState("");
   const [symbol, setSymbol] = useState("R_100");
   const [chartType, setChartType] = useState("mountain");
@@ -49,17 +109,18 @@ export function DerivSmartChart() {
   }, []);
 
   useEffect(() => {
-    if (!DERIV_APP_ID) {
-      setMarketStatus("App ID required");
-      return;
-    }
-
     let active = true;
-    const transport = new DerivSmartChartTransport(DERIV_APP_ID, (status) => {
-      if (!active) return;
-      setMarketStatus(status);
-      setConnectionOpen(status === "Live");
-    });
+    const transport = new DerivSmartChartTransport(
+      (status) => {
+        if (!active) return;
+        setMarketStatus(status);
+        setConnectionOpen(status === "Live");
+      },
+      (error) => {
+        if (!active) return;
+        setMarketError(error.message);
+      },
+    );
     transportRef.current = transport;
 
     void Promise.all([
@@ -82,27 +143,30 @@ export function DerivSmartChart() {
               if (typeof item !== "object" || item === null) continue;
               const { symbol: itemSymbol, times } = item as {
                 symbol?: string;
+                underlying_symbol?: string;
                 times?: { open?: string[]; close?: string[] };
               };
-              if (!itemSymbol || !times) continue;
+              const symbolCode = itemSymbol ?? (item as { underlying_symbol?: string }).underlying_symbol;
+              if (!symbolCode || !times) continue;
               const open = times.open?.[0] ?? "--";
               const close = times.close?.[0] ?? "--";
               const openTime = open === "--" ? "" : `${datePrefix}${open}Z`;
               const closeTime = close === "--" ? "" : `${datePrefix}${close}Z`;
               const openDate = openTime ? new Date(openTime) : null;
               const closeDate = closeTime ? new Date(closeTime) : null;
-              tradingTimes[itemSymbol] = {
+              tradingTimes[symbolCode] = {
                 isOpen: open === "00:00:00" && close === "23:59:59"
                   ? true
-                  : Boolean(openDate && closeDate && now >= openDate && now < closeDate),
+                  : open !== "--" && close !== "--" && Boolean(openDate && closeDate && now >= openDate && now < closeDate),
                 openTime,
                 closeTime,
               };
             }
           }
         }
+        const activeSymbols = normalizeActiveSymbols(symbolsResponse.active_symbols ?? []);
         setChartData({
-          activeSymbols: symbolsResponse.active_symbols,
+          activeSymbols,
           tradingTimes,
         });
       })
@@ -161,16 +225,6 @@ export function DerivSmartChart() {
 
   const renderChartSettings = useCallback(() => sdk ? <sdk.ChartSetting /> : null, [sdk]);
 
-  if (!DERIV_APP_ID) {
-    return (
-      <div className="smartchart-placeholder" role="status">
-        <span className="chart-empty-icon"><Wifi size={19} /></span>
-        <strong>Deriv SmartCharts is ready to connect</strong>
-        <span>Set NEXT_PUBLIC_DERIV_APP_ID in your app environment to load the live chart.</span>
-      </div>
-    );
-  }
-
   if (marketError) {
     return (
       <div className="smartchart-placeholder" role="status">
@@ -185,7 +239,7 @@ export function DerivSmartChart() {
     return (
       <div className="smartchart-placeholder" role="status">
         <span className="chart-empty-icon"><Wifi size={19} /></span>
-        <strong>{marketStatus === "Live" ? "Loading Deriv SmartCharts" : "Connecting to Deriv"}</strong>
+        <strong>{marketStatus === "Unavailable" ? "Deriv market data unavailable" : "Connecting to Deriv"}</strong>
         <span>Loading live market chart and available symbols.</span>
       </div>
     );

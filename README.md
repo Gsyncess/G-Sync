@@ -24,10 +24,10 @@ Express applies Helmet security headers and a 120-request-per-15-minute limit to
 
 ## Heroku deployment
 
-Heroku needs `PORT` and the Supabase environment variables set in the app config. Use the Heroku dashboard or CLI:
+Heroku supplies `PORT` automatically. Set the Supabase variables and Deriv OAuth settings in the app config. The Deriv callback URL must exactly match the one registered in your Deriv application:
 
 ```bash
-heroku config:set PORT=3000 NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+heroku config:set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_ANON_KEY=... DERIV_APP_ID=... DERIV_REDIRECT_URI=https://your-app.herokuapp.com/api/deriv/oauth/callback
 ```
 
 The app runs from the custom Node server on `PORT`; configure both Supabase variables in Heroku for authentication and authenticated realtime connections.
@@ -51,4 +51,4 @@ Build an APK or Android App Bundle from Android Studio. After changing the deplo
 
 ## Trading dashboard
 
-After Supabase sign-in, the home dashboard loads Deriv SmartCharts with live market data. Set `NEXT_PUBLIC_DERIV_APP_ID` to an app ID registered with Deriv to enable the chart. The performance metrics remain empty and bot controls stay disabled until Deriv account authorization and the trading strategy are implemented; the dashboard does not place trades.
+After Supabase sign-in, the home dashboard loads Deriv SmartCharts with live public market data from Deriv's [public WebSocket API](https://developers.deriv.com/llms/ws-public.md); market charts do not require an app ID or account authorization. To link a Deriv account, set `DERIV_APP_ID` and `DERIV_REDIRECT_URI` as described above and register that exact callback URL in your Deriv app settings. The dashboard's **Connect** button redirects the user through Deriv's [OAuth 2.0 Authorization Code + PKCE flow](https://developers.deriv.com/llms/oauth.md), then handles the callback and exchanges the one-time authorization code on the server. The Deriv access token is kept in an HttpOnly cookie and is never exposed to browser JavaScript. The performance metrics remain empty and bot controls stay disabled until the trading strategy is implemented; the dashboard does not place trades.

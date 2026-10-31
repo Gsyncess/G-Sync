@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
@@ -10,6 +11,8 @@ const development = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const derivAppId = (process.env.DERIV_APP_ID ?? process.env.NEXT_PUBLIC_DERIV_APP_ID)?.trim();
+const derivRedirectUri = process.env.DERIV_REDIRECT_URI?.trim();
 const nextApp = next({ dev: development });
 const nextHandler = nextApp.getRequestHandler();
 const supabaseAuth =
@@ -37,12 +40,59 @@ const securityHeaders = {
           frameAncestors: ["'none'"],
           imgSrc: ["'self'", "data:", "blob:"],
           objectSrc: ["'none'"],
-          scriptSrc: ["'self'", "'unsafe-inline'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"],
           styleSrc: ["'self'", "'unsafe-inline'"],
           upgradeInsecureRequests: [],
         },
       },
 };
+
+const oauthCookiePath = "/api/deriv/oauth/";
+const derivCookiePath = "/api/deriv";
+
+function appendCookie(
+  response: express.Response,
+  name: string,
+  value: string,
+  path: string,
+  maxAgeSeconds: number,
+) {
+  const attributes = [
+    `${name}=${value}`,
+    `Path=${path}`,
+    `Max-Age=${maxAgeSeconds}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  if (process.env.NODE_ENV === "production") attributes.push("Secure");
+  response.append("Set-Cookie", attributes.join("; "));
+}
+
+function clearCookie(response: express.Response, name: string, path: string) {
+  const attributes = [
+    `${name}=`,
+    `Path=${path}`,
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  if (process.env.NODE_ENV === "production") attributes.push("Secure");
+  response.append("Set-Cookie", attributes.join("; "));
+}
+
+function readCookie(request: express.Request, name: string) {
+  const cookie = request.headers.cookie
+    ?.split(";")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${name}=`));
+  return cookie ? cookie.slice(name.length + 1) : null;
+}
+
+function readEncodedCookie(request: express.Request, name: string) {
+  const value = readCookie(request, name);
+  return value ? Buffer.from(value, "base64url").toString("utf8") : null;
+}
 
 async function startServer() {
   await nextApp.prepare();
@@ -107,6 +157,209 @@ async function startServer() {
   app.get("/api/health", (_request, response) => {
     response.set("Cache-Control", "no-store");
     response.json({ status: "ok", service: "g-sync", realtime: "socket.io" });
+  });
+
+  app.get("/api/deriv/oauth/start", (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!derivAppId || !derivRedirectUri) {
+      response.status(503).send("Deriv OAuth is not configured for this app.");
+      return;
+    }
+
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(derivRedirectUri);
+    } catch {
+      response.status(500).send("Deriv OAuth redirect URI is invalid.");
+      return;
+    }
+    const requestOrigin = `${request.protocol}://${request.get("host")}`;
+    if (
+      redirectUrl.origin !== requestOrigin ||
+      redirectUrl.pathname !== "/api/deriv/oauth/callback" ||
+      redirectUrl.search ||
+      redirectUrl.hash
+    ) {
+      response.status(500).send("Set DERIV_REDIRECT_URI to this app's exact Deriv OAuth callback URL.");
+      return;
+    }
+    if (process.env.NODE_ENV === "production" && redirectUrl.protocol !== "https:") {
+      response.status(500).send("Deriv OAuth redirect URI must use HTTPS.");
+      return;
+    }
+
+    const state = randomBytes(32).toString("base64url");
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    appendCookie(response, "deriv_oauth_state", state, oauthCookiePath, 600);
+    appendCookie(response, "deriv_pkce_verifier", verifier, oauthCookiePath, 600);
+
+    const authorizationUrl = new URL("https://auth.deriv.com/oauth2/auth");
+    authorizationUrl.search = new URLSearchParams({
+      response_type: "code",
+      client_id: derivAppId,
+      redirect_uri: derivRedirectUri,
+      scope: "trade",
+      state,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    }).toString();
+    response.redirect(authorizationUrl.toString());
+  });
+
+  app.get("/api/deriv/oauth/callback", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    const clearOauthCookies = () => {
+      clearCookie(response, "deriv_oauth_state", oauthCookiePath);
+      clearCookie(response, "deriv_pkce_verifier", oauthCookiePath);
+    };
+    const authorizationError = request.query.error;
+    if (typeof authorizationError === "string") {
+      clearOauthCookies();
+      response.redirect(`/?deriv_oauth=${authorizationError === "access_denied" ? "cancelled" : "failed"}`);
+      return;
+    }
+
+    const code = request.query.code;
+    const returnedState = request.query.state;
+    const expectedState = readCookie(request, "deriv_oauth_state");
+    const verifier = readCookie(request, "deriv_pkce_verifier");
+    if (
+      typeof code !== "string" ||
+      typeof returnedState !== "string" ||
+      !expectedState ||
+      !verifier
+    ) {
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+      return;
+    }
+
+    const actualState = Buffer.from(returnedState);
+    const storedState = Buffer.from(expectedState);
+    if (actualState.length !== storedState.length || !timingSafeEqual(actualState, storedState)) {
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+      return;
+    }
+
+    if (!derivAppId || !derivRedirectUri) {
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+      return;
+    }
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(derivRedirectUri);
+    } catch {
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+      return;
+    }
+    const requestOrigin = `${request.protocol}://${request.get("host")}`;
+    if (
+      redirectUrl.origin !== requestOrigin ||
+      redirectUrl.pathname !== "/api/deriv/oauth/callback" ||
+      redirectUrl.search ||
+      redirectUrl.hash
+    ) {
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+      return;
+    }
+
+    try {
+      const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: derivAppId,
+          code,
+          redirect_uri: derivRedirectUri,
+          code_verifier: verifier,
+        }),
+      });
+      if (!tokenResponse.ok) {
+        console.error("Deriv OAuth token exchange failed", { status: tokenResponse.status });
+        clearOauthCookies();
+        response.redirect("/?deriv_oauth=failed");
+        return;
+      }
+
+      const tokenData = (await tokenResponse.json()) as {
+        access_token?: unknown;
+        expires_in?: unknown;
+      };
+      if (
+        typeof tokenData.access_token !== "string" ||
+        typeof tokenData.expires_in !== "number" ||
+        !Number.isFinite(tokenData.expires_in) ||
+        tokenData.expires_in <= 0
+      ) {
+        console.error("Deriv OAuth token exchange returned an invalid token response.");
+        clearOauthCookies();
+        response.redirect("/?deriv_oauth=failed");
+        return;
+      }
+
+      clearOauthCookies();
+      appendCookie(
+        response,
+        "deriv_access_token",
+        Buffer.from(tokenData.access_token).toString("base64url"),
+        derivCookiePath,
+        Math.floor(tokenData.expires_in),
+      );
+      response.redirect("/?deriv_oauth=connected");
+    } catch (error) {
+      console.error("Deriv OAuth token exchange could not be completed.", error);
+      clearOauthCookies();
+      response.redirect("/?deriv_oauth=failed");
+    }
+  });
+
+  app.get("/api/deriv/session", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    const accessToken = readEncodedCookie(request, "deriv_access_token");
+    if (!accessToken) {
+      response.json({ connected: false });
+      return;
+    }
+
+    try {
+      const accountResponse = await fetch("https://api.derivws.com/trading/v1/options/accounts", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (accountResponse.status === 401) {
+        clearCookie(response, "deriv_access_token", derivCookiePath);
+        response.json({ connected: false, expired: true });
+        return;
+      }
+      if (!accountResponse.ok) {
+        console.error("Deriv account verification failed", { status: accountResponse.status });
+        response.status(502).json({ error: "Could not verify the Deriv account connection." });
+        return;
+      }
+
+      const accountData = (await accountResponse.json()) as {
+        data?: Array<{ account_type?: unknown; currency?: unknown }>;
+      };
+      const accounts = (accountData.data ?? []).map((account) => ({
+        accountType: typeof account.account_type === "string" ? account.account_type : "unknown",
+        currency: typeof account.currency === "string" ? account.currency : "",
+      }));
+      response.json({ connected: true, accounts });
+    } catch (error) {
+      console.error("Could not verify the Deriv account connection.", error);
+      response.status(502).json({ error: "Could not verify the Deriv account connection." });
+    }
+  });
+
+  app.post("/api/deriv/session/disconnect", (_request, response) => {
+    clearCookie(response, "deriv_access_token", derivCookiePath);
+    response.set("Cache-Control", "no-store");
+    response.json({ connected: false });
   });
 
   io.on("connection", (socket) => {

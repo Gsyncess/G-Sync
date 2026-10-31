@@ -415,6 +415,37 @@ input {
   font-size: 9px;
 }
 
+.account-connect-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.deriv-account-message {
+  color: #536176;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.deriv-connect-button {
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #e7f5f1;
+  color: #117968;
+  font-size: 9px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.deriv-connect-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .account-connect-row svg {
   flex: none;
   color: #168c7a;
