@@ -14,13 +14,14 @@ type TradeOptions = {
   contractType: "CALL" | "PUT";
   currency: string;
   stake: number;
+  onPurchased?: (purchase: { stake: number; payout: number }) => void;
 };
 
 type DerivMessage = {
   msg_type?: string;
   error?: { message?: string };
   proposal?: { id?: unknown; ask_price?: unknown };
-  buy?: { contract_id?: unknown; buy_price?: unknown };
+  buy?: { contract_id?: unknown; buy_price?: unknown; payout?: unknown };
   proposal_open_contract?: {
     contract_id?: unknown;
     is_sold?: unknown;
@@ -91,11 +92,15 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
     contractId: number;
     contractType: "CALL" | "PUT";
     stake: number;
+    payout: number;
+    currency: string;
     profit: number;
   }>((resolve, reject) => {
     const socket = new WebSocket(otpUrl.toString(), { handshakeTimeout: 10_000 });
     let phase: "proposal" | "buy" | "contract" = "proposal";
     let contractId: number | null = null;
+    let actualStake: number | null = null;
+    let actualPayout: number | null = null;
     let settled = false;
     const timeout = setTimeout(() => {
       fail(
@@ -179,6 +184,13 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
         }
         contractId = returnedContractId;
         phase = "contract";
+        actualStake = parseAmount(message.buy?.buy_price);
+        actualPayout = parseAmount(message.buy?.payout);
+        if (actualStake === null || actualPayout === null) {
+          fail("Deriv confirmed the purchase but returned invalid stake or payout details.", true);
+          return;
+        }
+        options.onPurchased?.({ stake: actualStake, payout: actualPayout });
         send({
           proposal_open_contract: 1,
           contract_id: contractId,
@@ -197,15 +209,19 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
           contract.is_sold !== 1
         ) return;
         const finalContractId = contract.contract_id;
+        const finalStake = actualStake;
+        const finalPayout = actualPayout;
         const profit = parseAmount(contract.profit);
-        if (profit === null) {
+        if (profit === null || finalStake === null || finalPayout === null) {
           fail("The contract settled, but Deriv returned no valid profit amount.", true);
           return;
         }
         finish(() => resolve({
           contractId: finalContractId,
           contractType: options.contractType,
-          stake: options.stake,
+          stake: finalStake,
+          payout: finalPayout,
+          currency: options.currency,
           profit,
         }));
       }

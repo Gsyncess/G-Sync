@@ -10,7 +10,6 @@ import {
   Home,
   LogOut,
   Settings2,
-  ShieldCheck,
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
@@ -37,6 +36,13 @@ type SessionPerformance = {
   trades: number;
 };
 
+type OpenTradeDetails = {
+  stake: number;
+  payout: number;
+  currency: string;
+  contractType: "CALL" | "PUT";
+};
+
 type BotRuntime = {
   running: boolean;
   inFlight: boolean;
@@ -61,6 +67,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
   const [tradeInProgress, setTradeInProgress] = useState(false);
+  const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals">("home");
@@ -214,6 +221,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
     runtime.inFlight = true;
     setTradeInProgress(true);
+    setOpenTradeDetails(null);
     setBotStatus(`${contractType} · placing 5-tick contract`);
     void (async () => {
       try {
@@ -226,18 +234,17 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             stake,
           }),
         });
-        const result = await response.json() as {
-          contractId?: unknown;
-          profit?: unknown;
-          error?: unknown;
-          tradeMayBeOpen?: unknown;
-        };
         if (!response.ok) {
+          const result = await response.json() as {
+            error?: unknown;
+            tradeMayBeOpen?: unknown;
+          };
           const tradeMayBeOpen = result.tradeMayBeOpen === true;
           runtime.inFlight = tradeMayBeOpen;
           runtime.unresolvedTrade = tradeMayBeOpen;
           runtime.running = false;
           setBotRunning(false);
+          if (!tradeMayBeOpen) setOpenTradeDetails(null);
           setBotStatus(
             tradeMayBeOpen
               ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
@@ -246,11 +253,89 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           return;
         }
 
-        if (typeof result.profit !== "number" || !Number.isFinite(result.profit)) {
-          throw new Error("Deriv returned an invalid contract result.");
-        }
+        if (!response.body) throw new Error("Deriv trade updates were unavailable.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let remaining = "";
+        let settledProfit: number | null = null;
+        let streamFailed = false;
 
-        const profit = result.profit;
+        const handleTradeEvent = (line: string) => {
+          let event: unknown;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            throw new Error("Deriv returned an unreadable trade update.");
+          }
+          if (!event || typeof event !== "object") {
+            throw new Error("Deriv returned an invalid trade update.");
+          }
+          const update = event as Record<string, unknown>;
+
+          if (update.type === "purchased") {
+            if (
+              typeof update.stake !== "number" ||
+              !Number.isFinite(update.stake) ||
+              typeof update.payout !== "number" ||
+              !Number.isFinite(update.payout) ||
+              typeof update.currency !== "string" ||
+              (update.contractType !== "CALL" && update.contractType !== "PUT")
+            ) {
+              throw new Error("Deriv returned invalid stake or payout details.");
+            }
+            setOpenTradeDetails({
+              stake: update.stake,
+              payout: update.payout,
+              currency: update.currency,
+              contractType: update.contractType,
+            });
+            return;
+          }
+
+          if (update.type === "settled") {
+            if (typeof update.profit !== "number" || !Number.isFinite(update.profit)) {
+              throw new Error("Deriv returned an invalid contract result.");
+            }
+            settledProfit = update.profit;
+            setOpenTradeDetails(null);
+            return;
+          }
+
+          if (update.type === "error") {
+            const tradeMayBeOpen = update.tradeMayBeOpen === true;
+            runtime.inFlight = tradeMayBeOpen;
+            runtime.unresolvedTrade = tradeMayBeOpen;
+            runtime.running = false;
+            setBotRunning(false);
+            if (!tradeMayBeOpen) setOpenTradeDetails(null);
+            setBotStatus(
+              tradeMayBeOpen
+                ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
+                : typeof update.error === "string" ? update.error : "Trade failed. Bot stopped.",
+            );
+            streamFailed = true;
+            return;
+          }
+
+          throw new Error("Deriv returned an unknown trade update.");
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          remaining += decoder.decode(value, { stream: !done });
+          const lines = remaining.split("\n");
+          remaining = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.trim()) handleTradeEvent(line);
+            if (streamFailed) break;
+          }
+          if (streamFailed || done) break;
+        }
+        if (remaining.trim() && !streamFailed) handleTradeEvent(remaining);
+        if (streamFailed) return;
+        if (settledProfit === null) throw new Error("Deriv ended the trade stream before settlement.");
+
+        const profit = settledProfit;
         runtime.sessionProfit += profit;
         if (profit > 0) {
           runtime.nextStake = config.stakeAmount;
@@ -385,19 +470,23 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return `${value.toFixed(2)} ${currency}`;
     }
   };
+  const formatTradeAmount = (value: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch {
+      return `${value.toFixed(2)} ${currency}`;
+    }
+  };
   const decidedTrades = performance.wins + performance.losses;
   const hasReliableWinRate = decidedTrades >= 5;
   const winRate = hasReliableWinRate
     ? Math.round((performance.wins / decidedTrades) * 100)
     : 0;
-  const targetRange = botConfig.targetProfit + botConfig.targetLoss;
-  const zeroPosition = (botConfig.targetLoss / targetRange) * 100;
-  const currentPosition = Math.min(
-    100,
-    Math.max(0, ((performance.profit + botConfig.targetLoss) / targetRange) * 100),
-  );
-  const progressStart = Math.min(zeroPosition, currentPosition);
-  const progressWidth = Math.abs(currentPosition - zeroPosition);
   const selectDerivAccount = (account: DerivAccount) => {
     if (botRuntimeRef.current.running || botRuntimeRef.current.inFlight) return;
     setPerformance({ profit: 0, wins: 0, losses: 0, trades: 0 });
@@ -570,51 +659,12 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   </div>
                 </div>
               </div>
-              <div className="performance-progress">
-                <div className="performance-progress-labels">
-                  <span>Session target progress</span>
-                  <span>{derivConnected ? formatPerformanceAmount(performance.profit) : "--"}</span>
-                </div>
-                <div
-                  className={`performance-progress-track ${performance.profit < 0 ? "progress-negative" : "progress-positive"}`}
-                  role="progressbar"
-                  aria-label="Progress between session loss and profit targets"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={currentPosition}
-                  aria-valuetext={derivConnected ? `${formatPerformanceAmount(performance.profit)} session result` : "Connect Deriv to track session progress"}
-                >
-                  <span className="performance-progress-zero" style={{ left: `${zeroPosition}%` }} />
-                  <span
-                    className="performance-progress-fill"
-                    style={{ left: `${progressStart}%`, width: `${progressWidth}%` }}
-                  />
-                </div>
-                <div className="performance-progress-targets">
-                  <span>−{formatPerformanceAmount(botConfig.targetLoss)}</span>
-                  <span>Profit target {formatPerformanceAmount(botConfig.targetProfit)}</span>
-                </div>
-              </div>
-              <p className="performance-trade-count">{performance.trades} completed bot trade{performance.trades === 1 ? "" : "s"} this session</p>
-              <div className="account-connect-row">
-                <ShieldCheck size={15} />
-                <div className="account-connect-content">
-                  <span>
-                    {derivBusy
-                      ? "Checking Deriv connection…"
-                      : derivConnected
-                        ? `Deriv connected${accountSummary ? ` · ${accountSummary}` : ""}`
-                        : "Connect Deriv to authorize your account"}
-                  </span>
-                  {derivMessage && <span className="deriv-account-message" role="status">{derivMessage}</span>}
-                </div>
-              </div>
             </section>
 
             <div className="home-bot-controls" aria-label="Bot controls">
               <div className="bot-trade-progress" role="status" aria-live="polite">
                 <div className="bot-trade-progress-heading">
-                  <span>{tradeInProgress ? "Trade in progress · 5-tick contract" : "Open trade progress"}</span>
+                  <span>Open trade progress</span>
                   <span>{tradeInProgress ? "In progress" : "No open trade"}</span>
                 </div>
                 <div
@@ -625,8 +675,22 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 >
                   <span />
                 </div>
-                <span className="home-bot-status">{botStatus}</span>
+                <div className="bot-trade-values" aria-live="polite">
+                  {openTradeDetails ? (
+                    <>
+                      <span>{openTradeDetails.contractType}</span>
+                      <span>Stake {formatTradeAmount(openTradeDetails.stake, openTradeDetails.currency)}</span>
+                      <span>Potential payout {formatTradeAmount(openTradeDetails.payout, openTradeDetails.currency)}</span>
+                    </>
+                  ) : tradeInProgress ? (
+                    <span>Waiting for Deriv contract details…</span>
+                  ) : (
+                    <span>No active contract</span>
+                  )}
+                </div>
+                <span className="sr-only">{botStatus}</span>
               </div>
+              {derivMessage && <span className="sr-only" role="status">{derivMessage}</span>}
               <div className="bot-controls">
                 <button
                   type="button"

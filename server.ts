@@ -709,6 +709,7 @@ async function startServer() {
         return;
       }
       activeDerivTrades.add(tradeKey);
+      let streamStarted = false;
       try {
         const trade = await executeDerivFiveTickTrade({
           accessToken,
@@ -717,15 +718,50 @@ async function startServer() {
           contractType,
           currency: account.currency,
           stake,
+          onPurchased: (purchase) => {
+            if (response.destroyed || response.writableEnded) return;
+            if (!streamStarted) {
+              response.set({
+                "Cache-Control": "no-store, no-transform",
+                "Content-Type": "application/x-ndjson; charset=utf-8",
+                "X-Content-Type-Options": "nosniff",
+              });
+              response.flushHeaders();
+              streamStarted = true;
+            }
+            response.write(`${JSON.stringify({ type: "purchased", ...purchase, currency: account.currency, contractType })}\n`);
+          },
         });
-        response.json(trade);
+        if (streamStarted) {
+          if (!response.destroyed && !response.writableEnded) {
+            response.write(`${JSON.stringify({ type: "settled", ...trade })}\n`);
+            response.end();
+          }
+        } else if (!response.destroyed && !response.writableEnded) {
+          response.json(trade);
+        }
       } catch (error) {
-        if (error instanceof DerivTradeError) {
+        if (streamStarted) {
+          const errorMessage = error instanceof DerivTradeError
+            ? error.message
+            : "Could not complete the Deriv bot trade.";
+          if (!(error instanceof DerivTradeError)) {
+            console.error("Could not complete the Deriv bot trade.");
+          }
+          if (!response.destroyed && !response.writableEnded) {
+            response.write(`${JSON.stringify({
+              type: "error",
+              error: errorMessage,
+              tradeMayBeOpen: error instanceof DerivTradeError && error.tradeMayBeOpen,
+            })}\n`);
+            response.end();
+          }
+        } else if (error instanceof DerivTradeError && !response.destroyed && !response.writableEnded) {
           response.status(error.tradeMayBeOpen ? 504 : 502).json({
             error: error.message,
             tradeMayBeOpen: error.tradeMayBeOpen,
           });
-        } else {
+        } else if (!response.destroyed && !response.writableEnded) {
           console.error("Could not complete the Deriv bot trade.");
           response.status(502).json({ error: "Could not complete the Deriv bot trade." });
         }
