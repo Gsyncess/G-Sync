@@ -11,7 +11,10 @@ import {
   Clock3,
   Home,
   LogOut,
+  ShieldAlert,
   Settings2,
+  Sparkles,
+  Trophy,
   X,
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
@@ -61,6 +64,13 @@ type TradeHistoryEntry = {
 type TradeErrorToast = {
   id: number;
   message: string;
+};
+
+type SessionLimitNotice = {
+  id: number;
+  outcome: "profit" | "loss";
+  profit: number;
+  limit: number;
 };
 
 type BotRuntime = {
@@ -127,6 +137,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
   const [tradeErrorToast, setTradeErrorToast] = useState<TradeErrorToast | null>(null);
+  const [sessionLimitNotice, setSessionLimitNotice] = useState<SessionLimitNotice | null>(null);
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals" | "history">("home");
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
@@ -410,6 +421,15 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     }
   }, []);
 
+  useEffect(() => {
+    if (!sessionLimitNotice) return;
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSessionLimitNotice(null);
+    };
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => document.removeEventListener("keydown", dismissOnEscape);
+  }, [sessionLimitNotice]);
+
   const notifyTradeError = useCallback((message: string) => {
     if (tradeToastTimerRef.current !== null) {
       window.clearTimeout(tradeToastTimerRef.current);
@@ -420,6 +440,16 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setTradeErrorToast((current) => current?.id === id ? null : current);
       tradeToastTimerRef.current = null;
     }, 8000);
+  }, []);
+
+  const showSessionLimitNotice = useCallback((outcome: SessionLimitNotice["outcome"]) => {
+    const config = botConfigRef.current;
+    setSessionLimitNotice({
+      id: Date.now(),
+      outcome,
+      profit: botRuntimeRef.current.sessionProfit,
+      limit: outcome === "profit" ? config.targetProfit : config.targetLoss,
+    });
   }, []);
 
   const handleFeedStatus = useCallback((status: typeof marketFeedStatus) => {
@@ -442,7 +472,9 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       runtime.running = false;
       runtime.sessionLimitReached = true;
       setBotRunning(false);
-      setBotStatus(runtime.sessionProfit >= config.targetProfit ? "Session profit target reached" : "Session loss limit reached");
+      const outcome = runtime.sessionProfit >= config.targetProfit ? "profit" : "loss";
+      setBotStatus(outcome === "profit" ? "Session profit target reached" : "Session loss limit reached");
+      showSessionLimitNotice(outcome);
       return;
     }
 
@@ -656,11 +688,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session profit target reached");
+          showSessionLimitNotice("profit");
         } else if (runtime.sessionProfit <= -botConfigRef.current.targetLoss) {
           runtime.running = false;
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session loss limit reached");
+          showSessionLimitNotice("loss");
         } else {
           setBotStatus(
             runtime.running
@@ -687,7 +721,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         if (!runtime.inFlight) void refreshDerivAccounts();
       }
     })();
-  }, [notifyTradeError, refreshDerivAccounts]);
+  }, [notifyTradeError, refreshDerivAccounts, showSessionLimitNotice]);
 
   const disconnectDeriv = async () => {
     botRuntimeRef.current.running = false;
@@ -824,6 +858,59 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
   return (
     <main className="dashboard-shell">
+      {sessionLimitNotice && (
+        <div
+          className={`session-limit-overlay session-limit-${sessionLimitNotice.outcome}`}
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="session-limit-title"
+          aria-describedby="session-limit-description"
+          key={sessionLimitNotice.id}
+        >
+          <section className="session-limit-card">
+            <button
+              type="button"
+              className="session-limit-close"
+              aria-label="Dismiss session result"
+              onClick={() => setSessionLimitNotice(null)}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+            <div className="session-limit-icon" aria-hidden="true">
+              {sessionLimitNotice.outcome === "profit"
+                ? <Trophy size={34} />
+                : <ShieldAlert size={34} />}
+              {sessionLimitNotice.outcome === "profit" && (
+                <Sparkles className="session-limit-sparkle" size={18} />
+              )}
+            </div>
+            <p className="session-limit-eyebrow">BOT SESSION COMPLETE</p>
+            <h2 id="session-limit-title">
+              {sessionLimitNotice.outcome === "profit" ? "Congratulations!" : "Risk limit reached"}
+            </h2>
+            <p id="session-limit-description" className="session-limit-message">
+              {sessionLimitNotice.outcome === "profit"
+                ? "Your profit target was reached. The bot has stopped trading."
+                : "Your loss limit was reached. The bot has stopped trading to protect your account."}
+            </p>
+            <p className="session-limit-threshold">
+              {sessionLimitNotice.outcome === "profit" ? "Profit target" : "Loss limit"}{" "}
+              {formatTradeAmount(sessionLimitNotice.limit, selectedDerivAccount?.currency ?? "USD")}
+            </p>
+            <div className="session-limit-result">
+              <span>Session P/L</span>
+              <strong>{formatTradeAmount(sessionLimitNotice.profit, selectedDerivAccount?.currency ?? "USD")}</strong>
+            </div>
+            <button
+              type="button"
+              className="session-limit-dismiss"
+              onClick={() => setSessionLimitNotice(null)}
+            >
+              Continue
+            </button>
+          </section>
+        </div>
+      )}
       {tradeErrorToast && (
         <div className="trade-error-toast" role="alert" key={tradeErrorToast.id}>
           <AlertTriangle size={18} aria-hidden="true" />

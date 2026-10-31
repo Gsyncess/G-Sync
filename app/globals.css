@@ -159,6 +159,156 @@ input {
   background: #fff1ef;
 }
 
+.session-limit-overlay {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: max(20px, env(safe-area-inset-top)) 18px max(20px, env(safe-area-inset-bottom));
+  background: rgb(20 30 42 / 38%);
+  backdrop-filter: blur(7px);
+  animation: session-limit-overlay-enter 260ms ease-out both;
+}
+
+.session-limit-card {
+  position: relative;
+  width: min(390px, 100%);
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 24px;
+  padding: 32px 24px 24px;
+  background: rgb(255 255 255 / 88%);
+  box-shadow: 0 24px 80px rgb(18 31 44 / 24%);
+  text-align: center;
+  backdrop-filter: blur(18px);
+  animation: session-limit-card-enter 440ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.session-limit-profit .session-limit-card {
+  background: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(232 250 242 / 88%));
+}
+
+.session-limit-loss .session-limit-card {
+  background: linear-gradient(145deg, rgb(255 255 255 / 94%), rgb(255 241 238 / 90%));
+}
+
+.session-limit-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 72%);
+  color: #647286;
+  cursor: pointer;
+}
+
+.session-limit-icon {
+  position: relative;
+  display: grid;
+  width: 76px;
+  height: 76px;
+  place-items: center;
+  margin: 0 auto 17px;
+  border: 1px solid rgb(22 140 122 / 22%);
+  border-radius: 50%;
+  background: rgb(214 243 232 / 78%);
+  color: #168c7a;
+  animation: session-limit-icon-pop 600ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.session-limit-loss .session-limit-icon {
+  border-color: rgb(200 80 80 / 20%);
+  background: rgb(255 230 226 / 76%);
+  color: #bd5651;
+}
+
+.session-limit-sparkle {
+  position: absolute;
+  top: -3px;
+  right: -2px;
+  color: #c28a24;
+  animation: session-limit-sparkle 1.5s ease-in-out infinite;
+}
+
+.session-limit-eyebrow {
+  margin: 0 0 7px;
+  color: #718092;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .16em;
+}
+
+.session-limit-card h2 {
+  margin: 0;
+  color: #17213a;
+  font-size: 25px;
+  letter-spacing: -.04em;
+}
+
+.session-limit-message {
+  max-width: 290px;
+  margin: 9px auto 10px;
+  color: #627084;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.session-limit-threshold {
+  margin: 0 0 16px;
+  color: #7a8798;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.session-limit-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgb(118 137 151 / 15%);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgb(255 255 255 / 66%);
+  color: #68778a;
+  font-size: 11px;
+}
+
+.session-limit-result strong {
+  color: #168c7a;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-limit-loss .session-limit-result strong {
+  color: #bd5651;
+}
+
+.session-limit-dismiss {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 16px;
+  border: 0;
+  border-radius: 11px;
+  background: #168c7a;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.session-limit-dismiss:hover {
+  background: #117968;
+  transform: translateY(-1px);
+}
+
 .dashboard-header {
   z-index: 2;
   display: flex;
@@ -1149,6 +1299,53 @@ input {
   }
 }
 
+@keyframes session-limit-overlay-enter {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+  to {
+    opacity: 1;
+    backdrop-filter: blur(7px);
+  }
+}
+
+@keyframes session-limit-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes session-limit-icon-pop {
+  0% {
+    opacity: 0;
+    transform: scale(.55) rotate(-12deg);
+  }
+  70% {
+    transform: scale(1.1) rotate(3deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes session-limit-sparkle {
+  0%, 100% {
+    opacity: .55;
+    transform: scale(.8) rotate(-12deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15) rotate(12deg);
+  }
+}
+
 @keyframes performance-value-update {
   0% {
     opacity: 0.45;
@@ -1179,6 +1376,17 @@ input {
   .rate-ring,
   .trade-error-toast {
     animation: none;
+    transition: none;
+  }
+
+  .session-limit-overlay,
+  .session-limit-card,
+  .session-limit-icon,
+  .session-limit-sparkle {
+    animation: none;
+  }
+
+  .session-limit-dismiss {
     transition: none;
   }
 }
