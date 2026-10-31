@@ -60,6 +60,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [selectedDerivAccountId, setSelectedDerivAccountId] = useState("");
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
+  const [tradeInProgress, setTradeInProgress] = useState(false);
   const [botStatus, setBotStatus] = useState("Ready");
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals">("home");
@@ -93,8 +94,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     sessionProfit: 0,
   });
 
-  const loadDerivSession = useCallback(async (showLoading = true) => {
-    if (showLoading) setDerivBusy(true);
+  const loadDerivSession = useCallback(async () => {
+    setDerivBusy(true);
     try {
       const response = await fetch("/api/deriv/session", { cache: "no-store" });
       const result = (await response.json()) as DerivSessionResponse;
@@ -116,7 +117,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     } catch (error) {
       setDerivMessage(error instanceof Error ? error.message : "Could not check the Deriv connection.");
     } finally {
-      if (showLoading) setDerivBusy(false);
+      setDerivBusy(false);
     }
   }, []);
 
@@ -147,17 +148,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     }
     void loadDerivSession();
-    const refreshTimer = window.setInterval(() => {
-      void loadDerivSession(false);
-    }, 60_000);
-    const refreshOnFocus = () => {
-      void loadDerivSession(false);
-    };
-    window.addEventListener("focus", refreshOnFocus);
-    return () => {
-      window.clearInterval(refreshTimer);
-      window.removeEventListener("focus", refreshOnFocus);
-    };
   }, [loadDerivSession]);
 
   useEffect(() => {
@@ -223,6 +213,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     }
 
     runtime.inFlight = true;
+    setTradeInProgress(true);
     setBotStatus(`${contractType} · placing 5-tick contract`);
     void (async () => {
       try {
@@ -300,6 +291,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         );
       } finally {
         if (!runtime.unresolvedTrade) runtime.inFlight = false;
+        setTradeInProgress(runtime.inFlight || runtime.unresolvedTrade);
       }
     })();
   }, []);
@@ -393,8 +385,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return `${value.toFixed(2)} ${currency}`;
     }
   };
-  const winRate = performance.trades > 0
-    ? Math.round((performance.wins / performance.trades) * 100)
+  const decidedTrades = performance.wins + performance.losses;
+  const hasReliableWinRate = decidedTrades >= 5;
+  const winRate = hasReliableWinRate
+    ? Math.round((performance.wins / decidedTrades) * 100)
     : 0;
   const targetRange = botConfig.targetProfit + botConfig.targetLoss;
   const zeroPosition = (botConfig.targetLoss / targetRange) * 100;
@@ -511,13 +505,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       </header>
 
       <section className="dashboard-content" aria-labelledby="dashboard-title">
-        {activeView === "signals" ? (
-          <SignalPage
-            botConfig={botConfig}
-            onConfigChange={setBotConfig}
-          />
-        ) : (
-          <>
+        <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
             <div className="dashboard-greeting">
               <div>
                 <p className="dashboard-eyebrow">TRADING OVERVIEW</p>
@@ -565,15 +553,20 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                   <strong key={`losses-${performance.trades}`}>{performance.losses}</strong>
                 </div>
                 <div className="performance-metric performance-rate">
-                  <span>Rate</span>
+                  <span>Rate (5+)</span>
                   <div
                     className="rate-ring"
+                    title="Win rate is shown after at least five decided trades; breakeven trades are excluded."
                     style={{
                       background: `conic-gradient(#168c7a ${winRate}%, #e4eaf0 ${winRate}% 100%)`,
                     }}
-                    aria-label={performance.trades > 0 ? `Win rate ${winRate} percent` : "Win rate not available"}
+                    aria-label={
+                      hasReliableWinRate
+                        ? `Win rate ${winRate} percent from ${decidedTrades} trades`
+                        : `Win rate available after five decided trades; ${decidedTrades} completed`
+                    }
                   >
-                    <span>{performance.trades > 0 ? `${winRate}%` : "--"}</span>
+                    <span>{hasReliableWinRate ? `${winRate}%` : "--"}</span>
                   </div>
                 </div>
               </div>
@@ -619,7 +612,21 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             </section>
 
             <div className="home-bot-controls" aria-label="Bot controls">
-              <span className="home-bot-status" role="status">{botStatus}</span>
+              <div className="bot-trade-progress" role="status" aria-live="polite">
+                <div className="bot-trade-progress-heading">
+                  <span>{tradeInProgress ? "Trade in progress · 5-tick contract" : "Open trade progress"}</span>
+                  <span>{tradeInProgress ? "In progress" : "No open trade"}</span>
+                </div>
+                <div
+                  className={`bot-trade-progress-track ${tradeInProgress ? "bot-trade-progress-active" : ""}`}
+                  role="progressbar"
+                  aria-label="5-tick trade progress"
+                  aria-valuetext={tradeInProgress ? "Trade is being processed and awaiting settlement" : "No open trade"}
+                >
+                  <span />
+                </div>
+                <span className="home-bot-status">{botStatus}</span>
+              </div>
               <div className="bot-controls">
                 <button
                   type="button"
@@ -647,15 +654,20 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                     : "Bot signals use MACD crossovers. Contracts run for 5 ticks; the next stake rises 1.5× after a loss."}
               </p>
             </div>
-          </>
-        )}
+        </div>
+        <div className="dashboard-config-view" id="dashboard-config-view" hidden={activeView !== "signals"}>
+          <SignalPage
+            botConfig={botConfig}
+            onConfigChange={setBotConfig}
+          />
+        </div>
       </section>
 
       <nav className="dashboard-bottom-nav" aria-label="Main navigation">
-        <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined}>
+        <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined} aria-controls="dashboard-home-view">
           <Home size={19} /><span>Home</span>
         </button>
-        <button type="button" className={`bottom-nav-item ${activeView === "signals" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("signals")} aria-current={activeView === "signals" ? "page" : undefined}>
+        <button type="button" className={`bottom-nav-item ${activeView === "signals" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("signals")} aria-current={activeView === "signals" ? "page" : undefined} aria-controls="dashboard-config-view">
           <Activity size={19} /><span>Configure</span>
         </button>
         <button type="button" className="bottom-nav-item" disabled aria-label="History coming soon">

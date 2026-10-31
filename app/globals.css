@@ -467,8 +467,18 @@ input {
 
 .performance-panel {
   position: relative;
+  isolation: isolate;
   padding: 12px 13px 10px;
-  animation: performance-card-enter 520ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
+  background: linear-gradient(115deg, #fff 15%, #f5fbff 48%, #f4fbf8 70%, #fff 92%);
+  background-size: 220% 100%;
+  animation:
+    performance-card-enter 520ms cubic-bezier(0.2, 0.75, 0.25, 1) both,
+    performance-background-flow 16s ease-in-out infinite alternate;
+}
+
+.performance-panel > * {
+  position: relative;
+  z-index: 1;
 }
 
 .performance-heading h2 {
@@ -679,9 +689,73 @@ input {
   gap: 8px;
 }
 
+.bot-trade-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.bot-trade-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #536176;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.bot-trade-progress-heading > span:last-child {
+  color: #8994a3;
+  font-weight: 500;
+}
+
+.bot-trade-progress-active .bot-trade-progress-heading > span:last-child {
+  color: #168c7a;
+}
+
+.bot-trade-progress-track {
+  position: relative;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e9eef3;
+}
+
+.bot-trade-progress-track > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #39b89a, #168c7a);
+}
+
+.bot-trade-progress-active > span {
+  width: 38%;
+  animation: open-trade-progress 1.25s ease-in-out infinite alternate;
+}
+
 .home-bot-status {
   color: #536176;
   font-size: 11px;
+}
+
+.dashboard-home-view,
+.dashboard-config-view {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dashboard-home-view {
+  gap: 12px;
+}
+
+.dashboard-config-view {
+  flex: 1;
+}
+
+.dashboard-home-view[hidden],
+.dashboard-config-view[hidden] {
+  display: none;
 }
 
 .signal-config-panel {
@@ -906,13 +980,37 @@ input {
   }
 }
 
+@keyframes performance-background-flow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes open-trade-progress {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(165%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .performance-panel,
   .performance-metric > strong,
   .performance-progress-fill,
   .performance-progress-fill::after,
-  .rate-ring {
+  .rate-ring,
+  .bot-trade-progress-active > span {
     animation: none;
     transition: none;
+  }
+
+  .bot-trade-progress-active > span {
+    width: 100%;
+    transform: none;
   }
 }
