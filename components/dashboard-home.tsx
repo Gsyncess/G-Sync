@@ -100,6 +100,19 @@ function isTradeHistoryEntry(value: unknown): value is TradeHistoryEntry {
   );
 }
 
+function formatTradeAmount(value: number, currency: string) {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency}`;
+  }
+}
+
 export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeProps) {
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
@@ -443,6 +456,21 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
     const contractType = signal.tradeSignal;
     const stake = runtime.nextStake ?? config.stakeAmount;
+    if (stake < 1) {
+      runtime.running = false;
+      setBotRunning(false);
+      setBotStatus("Minimum stake is $1. Update your stake before starting.");
+      notifyTradeError("The minimum stake is $1. Update your bot stake before trading.");
+      return;
+    }
+    if (stake > account.balance) {
+      runtime.running = false;
+      setBotRunning(false);
+      const message = `Insufficient balance: ${formatTradeAmount(account.balance, account.currency)} available, but the next stake is ${formatTradeAmount(stake, account.currency)}. The bot was stopped.`;
+      setBotStatus(message);
+      notifyTradeError(message);
+      return;
+    }
 
     runtime.inFlight = true;
     setTradeInProgress(true);
@@ -692,6 +720,21 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       runtime.inFlight ||
       runtime.unresolvedTrade
     ) return;
+    const nextStake = runtime.sessionLimitReached
+      ? botConfig.stakeAmount
+      : runtime.nextStake ?? botConfig.stakeAmount;
+    if (nextStake < 1) {
+      const message = "The minimum stake is $1. Update your bot stake before starting.";
+      setBotStatus(message);
+      notifyTradeError(message);
+      return;
+    }
+    if (nextStake > selectedDerivAccount.balance) {
+      const message = `Insufficient balance: ${formatTradeAmount(selectedDerivAccount.balance, selectedDerivAccount.currency)} available, but the next stake is ${formatTradeAmount(nextStake, selectedDerivAccount.currency)}.`;
+      setBotStatus(message);
+      notifyTradeError(message);
+      return;
+    }
     if (runtime.sessionLimitReached) {
       runtime.sessionProfit = 0;
       runtime.nextStake = botConfig.stakeAmount;
@@ -747,18 +790,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   };
   const formatPerformanceAmount = (value: number) => {
     const currency = selectedDerivAccount?.currency ?? "USD";
-    try {
-      return new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value);
-    } catch {
-      return `${value.toFixed(2)} ${currency}`;
-    }
-  };
-  const formatTradeAmount = (value: number, currency: string) => {
     try {
       return new Intl.NumberFormat("en-US", {
         style: "currency",
@@ -917,7 +948,11 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               </span>
             </div>
 
-            <MarketConsole onMarketSignal={handleMarketSignal} onFeedStatus={handleFeedStatus} />
+            <MarketConsole
+              isBotRunning={botRunning}
+              onMarketSignal={handleMarketSignal}
+              onFeedStatus={handleFeedStatus}
+            />
 
             <section
               className="performance-panel"

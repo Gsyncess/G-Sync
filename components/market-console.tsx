@@ -29,6 +29,7 @@ export type MarketSignal = {
 };
 
 type MarketConsoleProps = {
+  isBotRunning: boolean;
   onMarketSignal?: (signal: MarketSignal) => void;
   onFeedStatus?: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void;
 };
@@ -38,10 +39,14 @@ const MARKET_SYMBOL = "R_100";
 const SCAN_INTERVAL = 20;
 const INDICATOR_WARMUP_TICKS = 35;
 
-export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
+export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const entriesRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(0);
+  const isBotRunningRef = useRef(isBotRunning);
+  isBotRunningRef.current = isBotRunning;
+  const logEntryRef = useRef<((message: string, level?: ConsoleEntry["level"], time?: Date) => void) | null>(null);
+  const recentEntryRef = useRef<{ key: string; timestamp: number } | null>(null);
   const indicatorRef = useRef<IndicatorState>({
     fast: null,
     slow: null,
@@ -54,7 +59,11 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
   useEffect(() => {
     let active = true;
     const appendEntry = (message: string, level: ConsoleEntry["level"] = "info", time = new Date()) => {
-      if (!active) return;
+      if (!active || !isBotRunningRef.current) return;
+      const key = `${level}:${message}`;
+      const now = Date.now();
+      if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 1000) return;
+      recentEntryRef.current = { key, timestamp: now };
       const entry: ConsoleEntry = {
         id: nextIdRef.current++,
         time: time.toLocaleTimeString(),
@@ -63,8 +72,8 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
       };
       setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
+    logEntryRef.current = appendEntry;
 
-    appendEntry(`Connecting to the public ${MARKET_SYMBOL} market feed.`);
     const transport = new DerivMarketTransport(
       (status) => {
         if (!active) return;
@@ -149,10 +158,15 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
 
     return () => {
       active = false;
+      logEntryRef.current = null;
       unsubscribe();
       transport.close();
     };
   }, [onFeedStatus, onMarketSignal]);
+
+  useEffect(() => {
+    if (isBotRunning) logEntryRef.current?.("Bot started · scanning market");
+  }, [isBotRunning]);
 
   useEffect(() => {
     entriesRef.current?.scrollTo({ top: 0 });

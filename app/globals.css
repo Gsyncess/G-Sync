@@ -4,8 +4,8 @@
 
 :root {
   color-scheme: light;
-  --lavender: #edf4ff;
-  --cobalt: #2539a5;
+  --lavender: #effaf6;
+  --cobalt: #168c7a;
   --ink: #17213a;
   --phone-bg: #ffffff;
   --app-surface: #ffffff;
@@ -39,7 +39,7 @@ input {
 }
 
 ::selection {
-  background: #dce2ff;
+  background: #d6f3e8;
   color: var(--cobalt);
 }
 
@@ -192,7 +192,7 @@ input {
   flex: none;
   place-items: center;
   color: #fff;
-  background: #2539a5;
+  background: #168c7a;
 }
 
 .dashboard-brand-icon {
@@ -999,8 +999,8 @@ input {
 }
 
 .signal-config-input:focus {
-  border-color: #6879ce;
-  outline: 3px solid rgb(37 57 165 / 10%);
+  border-color: #168c7a;
+  outline: 3px solid rgb(22 140 122 / 10%);
   background: #fff;
 }
 
@@ -1084,7 +1084,7 @@ input {
 }
 
 .bottom-nav-active {
-  color: #2539a5;
+  color: #168c7a;
 }
 
 .bottom-nav-item:disabled {
@@ -1098,7 +1098,7 @@ input {
     min-height: min(640px, calc(100dvh - 56px));
     border: 7px solid rgba(255, 255, 255, 0.92);
     border-radius: 24px;
-    box-shadow: 0 24px 70px rgba(37, 57, 165, 0.18);
+    box-shadow: 0 24px 70px rgba(22, 140, 122, 0.18);
   }
 
   .dashboard-content {

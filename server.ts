@@ -722,10 +722,13 @@ async function startServer() {
       if (
         !/^[a-zA-Z0-9_-]{2,64}$/.test(accountId) ||
         (contractType !== "CALL" && contractType !== "PUT") ||
-        !Number.isFinite(stake) ||
-        stake <= 0
+        !Number.isFinite(stake)
       ) {
         response.status(400).json({ error: "Invalid account, direction, or stake." });
+        return;
+      }
+      if (stake < 1) {
+        response.status(400).json({ error: "The minimum bot stake is $1." });
         return;
       }
 
@@ -781,7 +784,7 @@ async function startServer() {
         return;
       }
       if (stake > account.balance) {
-        response.status(400).json({ error: "The trade stake exceeds the selected account balance." });
+        response.status(400).json({ error: "Insufficient balance for this trade stake." });
         return;
       }
 

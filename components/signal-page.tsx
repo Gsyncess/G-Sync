@@ -27,16 +27,21 @@ export function SignalPage({
   const updateField = (field: keyof SignalConfig, value: string) => {
     setInputValues((current) => ({ ...current, [field]: value }));
     const parsedValue = Number(value);
-    if (value.trim() !== "" && Number.isFinite(parsedValue) && parsedValue > 0) {
+    const minimum = field === "stakeAmount" ? 1 : 0;
+    if (value.trim() !== "" && Number.isFinite(parsedValue) && parsedValue > minimum) {
       onConfigChange({ ...botConfig, [field]: parsedValue });
     }
   };
 
   const normalizeField = (field: keyof SignalConfig) => {
     const parsedValue = Number(inputValues[field]);
+    const minimum = field === "stakeAmount" ? 1 : 0;
+    const normalizedValue = Number.isFinite(parsedValue) && parsedValue > minimum
+      ? parsedValue
+      : field === "stakeAmount" ? Math.max(botConfig.stakeAmount, 1) : botConfig[field];
     setInputValues((current) => ({
       ...current,
-      [field]: String(Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : botConfig[field]),
+      [field]: String(normalizedValue),
     }));
   };
 
@@ -77,11 +82,11 @@ export function SignalPage({
           </label>
           <label className="signal-config-field">
             <span>Stake amount</span>
-            <small>Starting stake for each trade.</small>
+            <small>Starting stake for each trade. Minimum $1.</small>
             <input
               className="signal-config-input"
               type="number"
-              min="0.01"
+              min="1"
               step="any"
               value={inputValues.stakeAmount}
               onChange={(event) => updateField("stakeAmount", event.target.value)}
