@@ -6,7 +6,11 @@ import helmet from "helmet";
 import next from "next";
 import { createClient } from "@supabase/supabase-js";
 import { Server as SocketServer } from "socket.io";
-import { DerivTradeError, executeDerivFiveTickTrade } from "./lib/deriv-trading";
+import {
+  DerivTradeError,
+  executeDerivFiveTickTrade,
+  subscribeDerivBalance,
+} from "./lib/deriv-trading";
 
 const development = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
@@ -584,6 +588,61 @@ async function startServer() {
         warning: "Deriv authorization succeeded, but account details could not be loaded.",
       });
     }
+  });
+
+  app.get("/api/deriv/balance-stream", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    const accountId = request.query.accountId;
+    if (typeof accountId !== "string" || !/^[a-zA-Z0-9_-]{2,64}$/.test(accountId)) {
+      response.status(400).json({ error: "Invalid Deriv account." });
+      return;
+    }
+    if (!derivAppId) {
+      response.status(503).json({ error: "Deriv live balance updates are not configured." });
+      return;
+    }
+
+    let accessToken = readEncodedCookie(request, "deriv_access_token");
+    if (!accessToken) accessToken = await refreshDerivAccessToken(request, response);
+    if (!accessToken) {
+      response.status(401).json({ error: "Connect your Deriv account to receive balance updates." });
+      return;
+    }
+
+    response.set({
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "X-Accel-Buffering": "no",
+    });
+    response.flushHeaders();
+    response.write("retry: 3000\n\n");
+
+    let closeSubscription = () => {};
+    const keepAlive = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) response.write(": keepalive\n\n");
+    }, 20_000);
+    response.on("close", () => {
+      clearInterval(keepAlive);
+      closeSubscription();
+    });
+
+    closeSubscription = subscribeDerivBalance({
+      accessToken,
+      appId: derivAppId,
+      accountId,
+      onBalance: (balance) => {
+        if (!response.destroyed && !response.writableEnded) {
+          response.write(`data: ${JSON.stringify({ type: "balance", ...balance })}\n\n`);
+        }
+      },
+      onError: (message) => {
+        if (!response.destroyed && !response.writableEnded) {
+          response.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+          response.end();
+        }
+      },
+    });
   });
 
   app.post("/api/deriv/session/disconnect", (_request, response) => {

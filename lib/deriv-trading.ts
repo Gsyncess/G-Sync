@@ -21,6 +21,11 @@ type TradeOptions = {
 type DerivMessage = {
   msg_type?: string;
   error?: { message?: string };
+  balance?: {
+    balance?: unknown;
+    currency?: unknown;
+    loginid?: unknown;
+  };
   proposal?: { id?: unknown; ask_price?: unknown };
   buy?: { contract_id?: unknown; buy_price?: unknown; payout?: unknown };
   proposal_open_contract?: {
@@ -39,6 +44,85 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseAmount(value: unknown): number | null {
   const amount = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(amount) ? amount : null;
+}
+
+export function subscribeDerivBalance(options: {
+  accessToken: string;
+  appId: string;
+  accountId: string;
+  onBalance: (balance: { accountId: string; balance: number; currency: string }) => void;
+  onError: (message: string) => void;
+}) {
+  const socketUrl = new URL("wss://ws.derivws.com/websockets/v3");
+  socketUrl.searchParams.set("app_id", options.appId);
+  const socket = new WebSocket(socketUrl.toString(), { handshakeTimeout: 10_000 });
+  let authorized = false;
+  let finished = false;
+  const timeout = setTimeout(() => {
+    fail("Deriv balance subscription timed out.");
+  }, 15_000);
+
+  const close = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timeout);
+    if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+    else if (socket.readyState === WebSocket.OPEN) socket.close();
+  };
+
+  const fail = (message: string) => {
+    if (finished) return;
+    options.onError(message);
+    close();
+  };
+
+  socket.on("open", () => {
+    socket.send(JSON.stringify({ authorize: options.accessToken, req_id: 1 }));
+  });
+
+  socket.on("message", (data) => {
+    let message: DerivMessage;
+    try {
+      message = JSON.parse(data.toString()) as DerivMessage;
+    } catch {
+      fail("Deriv sent an unreadable balance update.");
+      return;
+    }
+
+    if (message.error) {
+      fail(message.error.message || "Deriv balance subscription failed.");
+      return;
+    }
+
+    if (message.msg_type === "authorize" && !authorized) {
+      authorized = true;
+      socket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 2 }));
+      return;
+    }
+
+    if (message.msg_type !== "balance" || !message.balance) return;
+    const balance = parseAmount(message.balance.balance);
+    const accountId = message.balance.loginid;
+    const currency = message.balance.currency;
+    if (
+      accountId !== options.accountId ||
+      balance === null ||
+      typeof currency !== "string" ||
+      !/^[A-Z]{3}$/.test(currency)
+    ) return;
+
+    clearTimeout(timeout);
+    options.onBalance({ accountId, balance, currency });
+  });
+
+  socket.on("error", () => {
+    fail("Could not connect to Deriv live balance updates.");
+  });
+  socket.on("close", () => {
+    if (!finished) fail("Deriv live balance updates disconnected.");
+  });
+
+  return close;
 }
 
 export async function executeDerivFiveTickTrade(options: TradeOptions) {
