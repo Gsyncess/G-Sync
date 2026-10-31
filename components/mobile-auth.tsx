@@ -6,7 +6,6 @@ import { io } from "socket.io-client";
 import {
   ArrowLeft,
   ArrowRight,
-  Bot,
   Check,
   Eye,
   EyeOff,
@@ -19,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase";
 import { DashboardHome } from "@/components/dashboard-home";
+import { RobotLogo } from "@/components/robot-logo";
 
 type Screen = "splash" | "login" | "signup" | "reset";
 
@@ -138,7 +138,7 @@ export function MobileAuth() {
   const isSplash = screen === "splash";
   const title = screen === "signup" ? "Create your account" : screen === "reset" ? "Reset your password" : "Login to your account";
   const action = screen === "signup" ? "Sign up" : screen === "reset" ? "Send reset link" : "Sign in";
-  const shellBackground = isSplash ? "#2539a5" : "#edf4ff";
+  const shellBackground = "#ffffff";
 
   useEffect(() => {
     const themeMetaTags = document.querySelectorAll('meta[name="theme-color"]');
@@ -151,10 +151,9 @@ export function MobileAuth() {
       themeMetaTags.forEach((themeMeta) => themeMeta.setAttribute("content", shellBackground));
     }
     document.documentElement.style.setProperty("--phone-bg", shellBackground);
-    const pageBackground = isSplash ? shellBackground : "#ffffff";
-    document.documentElement.style.backgroundColor = pageBackground;
-    document.body.style.backgroundColor = pageBackground;
-    document.body.style.color = isSplash ? "#ffffff" : "#17213a";
+    document.documentElement.style.backgroundColor = shellBackground;
+    document.body.style.backgroundColor = shellBackground;
+    document.body.style.color = "#17213a";
   }, [shellBackground, isSplash]);
 
   if (authenticated) {
@@ -172,7 +171,7 @@ export function MobileAuth() {
   return (
     <main
       className="phone-shell relative flex min-h-svh flex-col px-7 pb-8 pt-4 sm:px-8"
-      style={{ background: isSplash ? shellBackground : "#ffffff" }}
+      style={{ background: shellBackground }}
     >
       <AnimatePresence mode="wait">
         {isSplash ? (
@@ -182,19 +181,19 @@ export function MobileAuth() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.35 }}
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-brand-600 text-white"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white text-slate-900"
             aria-label="G-Sync splash screen"
           >
             <motion.div
               animate={{ y: [0, -6, 0], rotate: [0, 4, -4, 0] }}
               transition={{ duration: 2.4, ease: "easeInOut", repeat: Infinity }}
-              className="mb-5 grid size-[78px] place-items-center rounded-[22px] border border-white/25 bg-white/10 shadow-[0_18px_50px_rgba(15,23,42,0.18)]"
+              className="mb-5 grid size-[92px] place-items-center rounded-[28px] border border-emerald-100 bg-emerald-50/80 shadow-[0_16px_38px_rgba(15,23,42,0.12)]"
             >
-              <Bot size={38} strokeWidth={1.8} />
+              <RobotLogo className="size-[68px]" />
             </motion.div>
             <span className="text-[32px] font-semibold tracking-tight">G-Sync</span>
-            <span className="mt-2 text-sm text-white/75">Your life, in sync.</span>
-            <div className="absolute bottom-10 flex items-center gap-2 text-[11px] text-white/60">
+            <span className="mt-2 text-sm text-slate-500">Your life, in sync.</span>
+            <div className="absolute bottom-10 flex items-center gap-2 text-[11px] text-slate-400">
               <Sparkles size={13} /> A little more in sync
             </div>
           </motion.section>
@@ -218,8 +217,8 @@ export function MobileAuth() {
                 </button>
               )}
               <a href="#home" className="flex items-center gap-2 text-[21px] font-bold tracking-tight text-brand-700" aria-label="G-Sync home">
-                <span className="grid size-8 place-items-center rounded-xl bg-brand-50 text-brand-600">
-                  <Bot size={18} strokeWidth={2.1} />
+                <span className="grid size-9 place-items-center rounded-xl bg-emerald-50">
+                  <RobotLogo className="size-8" />
                 </span>
                 <span>
                   G-Sync<span className="text-brand-500">.</span>
@@ -228,7 +227,7 @@ export function MobileAuth() {
             </header>
 
             <div className="mx-auto mt-8 grid size-14 place-items-center rounded-2xl bg-brand-50 text-brand-600">
-              {screen === "reset" ? <LockKeyhole size={23} /> : <Bot size={24} strokeWidth={2.1} />}
+              {screen === "reset" ? <LockKeyhole size={23} /> : <RobotLogo className="size-12" />}
             </div>
 
             <section className="mt-6 flex flex-1 flex-col" aria-labelledby="auth-title">

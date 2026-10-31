@@ -6,7 +6,6 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   AlertTriangle,
-  Bot,
   ChevronDown,
   CircleHelp,
   Clock3,
@@ -17,6 +16,7 @@ import {
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
+import { RobotLogo } from "@/components/robot-logo";
 
 type DerivAccount = {
   accountId: string;
@@ -805,7 +805,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       )}
       <header className="dashboard-header">
         <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
-          <span className="dashboard-brand-icon"><Bot size={19} strokeWidth={2.2} /></span>
+          <span className="dashboard-brand-icon"><RobotLogo className="size-7" /></span>
           <span>G-Sync<span className="dashboard-brand-dot">.</span></span>
         </a>
         <div className="dashboard-header-actions">
