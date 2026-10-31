@@ -84,7 +84,7 @@ export function DerivSmartChart() {
   const [chartData, setChartData] = useState<MarketChartData | null>(null);
   const [marketStatus, setMarketStatus] = useState("Connecting");
   const [marketError, setMarketError] = useState("");
-  const [symbol, setSymbol] = useState("R_100");
+  const [symbol] = useState("R_100");
   const [chartType, setChartType] = useState("mountain");
   const [granularity, setGranularity] = useState<number | undefined>(60);
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -206,10 +206,7 @@ export function DerivSmartChart() {
     if (nextChartType) setChartType(nextChartType);
   }, []);
 
-  const renderTopWidgets = useCallback(() => {
-    if (!sdk) return null;
-    return <sdk.ChartTitle onChange={setSymbol} isNestedList />;
-  }, [sdk]);
+  const renderTopWidgets = useCallback(() => null, []);
 
   const renderToolbar = useCallback(() => {
     if (!sdk) return null;

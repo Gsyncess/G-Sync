@@ -42,7 +42,23 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivMessage, setDerivMessage] = useState("");
   const [selectedDerivAccountId, setSelectedDerivAccountId] = useState("");
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
+  const [botRunning, setBotRunning] = useState(false);
+  const [botStatus, setBotStatus] = useState("Ready");
+  const [botConfig, setBotConfig] = useState({
+    targetProfit: 20,
+    targetLoss: 10,
+    stakeAmount: 5,
+  });
   const derivMenuRef = useRef<HTMLDivElement>(null);
+  const botStateRef = useRef({
+    price: 100,
+    emaFast: 100,
+    emaSlow: 100,
+    macd: 0,
+    signal: 0,
+    position: "flat" as "flat" | "long" | "short",
+    entryPrice: 0,
+  });
 
   const loadDerivSession = useCallback(async (showLoading = true) => {
     if (showLoading) setDerivBusy(true);
@@ -128,6 +144,60 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [derivMenuOpen]);
+
+  useEffect(() => {
+    if (!botRunning || !derivConnected) {
+      setBotStatus("Ready");
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      const state = botStateRef.current;
+      const drift = (Math.random() - 0.5) * 1.8;
+      const nextPrice = Number(Math.max(0, state.price + drift).toFixed(2));
+      const fastAlpha = 2 / (12 + 1);
+      const slowAlpha = 2 / (26 + 1);
+      state.emaFast = state.emaFast + fastAlpha * (nextPrice - state.emaFast);
+      state.emaSlow = state.emaSlow + slowAlpha * (nextPrice - state.emaSlow);
+      const macd = state.emaFast - state.emaSlow;
+      const signalAlpha = 2 / (9 + 1);
+      state.macd = macd;
+      state.signal = state.signal === 0 ? macd : state.signal + signalAlpha * (macd - state.signal);
+      state.price = nextPrice;
+
+      const direction = state.macd > state.signal ? "long" : state.macd < state.signal ? "short" : "flat";
+
+      if (state.position === "flat") {
+        if (direction === "long") {
+          state.position = "long";
+          state.entryPrice = nextPrice;
+          setBotStatus("Long set");
+        } else if (direction === "short") {
+          state.position = "short";
+          state.entryPrice = nextPrice;
+          setBotStatus("Short set");
+        }
+      } else if (state.position === "long") {
+        const profit = (nextPrice - state.entryPrice) * botConfig.stakeAmount;
+        const loss = (state.entryPrice - nextPrice) * botConfig.stakeAmount;
+        if (profit >= botConfig.targetProfit || loss >= botConfig.targetLoss || direction !== "long") {
+          state.position = "flat";
+          state.entryPrice = 0;
+          setBotStatus(profit >= botConfig.targetProfit ? "Profit target hit" : "Stop loss hit");
+        }
+      } else if (state.position === "short") {
+        const profit = (state.entryPrice - nextPrice) * botConfig.stakeAmount;
+        const loss = (nextPrice - state.entryPrice) * botConfig.stakeAmount;
+        if (profit >= botConfig.targetProfit || loss >= botConfig.targetLoss || direction !== "short") {
+          state.position = "flat";
+          state.entryPrice = 0;
+          setBotStatus(profit >= botConfig.targetProfit ? "Profit target hit" : "Stop loss hit");
+        }
+      }
+    }, 2500);
+
+    return () => window.clearInterval(timer);
+  }, [botConfig.stakeAmount, botConfig.targetLoss, botConfig.targetProfit, botRunning, derivConnected]);
 
   const disconnectDeriv = async () => {
     setDerivBusy(true);
@@ -280,7 +350,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             <div className="market-title-wrap">
               <div>
                 <h2>Deriv SmartCharts</h2>
-                <p>Live market data · choose a symbol in the chart</p>
+                <p>Live market data · Volatility 100 Index</p>
               </div>
             </div>
           </div>
@@ -333,10 +403,74 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         </section>
 
         <div className="bot-controls" aria-label="Bot controls">
-          <button type="button" className="bot-start-button" disabled title="Connect and authorize a Deriv account first">Start bot</button>
-          <button type="button" className="bot-stop-button" disabled title="No bot session is running">Stop</button>
+          <div className="bot-setup-panel" style={{ display: "grid", gap: 12, width: "100%" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
+                <span>Target profit</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={botConfig.targetProfit}
+                  onChange={(event) => setBotConfig((current) => ({ ...current, targetProfit: Number(event.target.value) || 1 }))}
+                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
+                <span>Target loss</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={botConfig.targetLoss}
+                  onChange={(event) => setBotConfig((current) => ({ ...current, targetLoss: Number(event.target.value) || 1 }))}
+                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 6, color: "#dfe7f4", fontSize: 12 }}>
+                <span>Stake amount</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={botConfig.stakeAmount}
+                  onChange={(event) => setBotConfig((current) => ({ ...current, stakeAmount: Number(event.target.value) || 1 }))}
+                  style={{ borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(15,23,42,0.75)", color: "white", padding: "8px 10px" }}
+                />
+              </label>
+            </div>
+            <div style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ color: "#93c5fd", fontSize: 12 }}>{botStatus}</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  className="bot-start-button"
+                  onClick={() => {
+                    if (!derivConnected) return;
+                    setBotRunning(true);
+                    setBotStatus("Watching market");
+                  }}
+                  disabled={!derivConnected || botRunning}
+                >
+                  Start bot
+                </button>
+                <button
+                  type="button"
+                  className="bot-stop-button"
+                  onClick={() => {
+                    setBotRunning(false);
+                    setBotStatus("Ready");
+                    botStateRef.current = { price: 100, emaFast: 100, emaSlow: 100, macd: 0, signal: 0, position: "flat", entryPrice: 0 };
+                  }}
+                  disabled={!botRunning}
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <p className="dashboard-disclaimer">Trading controls unlock after account authorization and strategy setup.</p>
+        <p className="dashboard-disclaimer">Trading controls unlock after account authorization and setup.</p>
       </section>
 
       <nav className="dashboard-bottom-nav" aria-label="Main navigation">
