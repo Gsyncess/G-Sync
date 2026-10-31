@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   Bot,
   ChevronDown,
   CircleHelp,
@@ -10,6 +11,7 @@ import {
   Home,
   LogOut,
   Settings2,
+  X,
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
@@ -54,6 +56,11 @@ type TradeHistoryEntry = {
   completedAt: string;
 };
 
+type TradeErrorToast = {
+  id: number;
+  message: string;
+};
+
 type BotRuntime = {
   running: boolean;
   inFlight: boolean;
@@ -95,6 +102,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [tradeProgressTicks, setTradeProgressTicks] = useState(0);
   const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
+  const [tradeErrorToast, setTradeErrorToast] = useState<TradeErrorToast | null>(null);
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals" | "history">("home");
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
@@ -120,6 +128,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   selectedAccountRef.current = selectedDerivAccount;
   const derivConnectedRef = useRef(derivConnected);
   derivConnectedRef.current = derivConnected;
+  const marketFeedStatusRef = useRef(marketFeedStatus);
+  marketFeedStatusRef.current = marketFeedStatus;
+  const tradeToastTimerRef = useRef<number | null>(null);
+  const tradeToastIdRef = useRef(0);
   const botRuntimeRef = useRef<BotRuntime>({
     running: false,
     inFlight: false,
@@ -240,18 +252,37 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     };
   }, [derivMenuOpen]);
 
+  useEffect(() => () => {
+    if (tradeToastTimerRef.current !== null) {
+      window.clearTimeout(tradeToastTimerRef.current);
+    }
+  }, []);
+
+  const notifyTradeError = useCallback((message: string) => {
+    if (tradeToastTimerRef.current !== null) {
+      window.clearTimeout(tradeToastTimerRef.current);
+    }
+    const id = ++tradeToastIdRef.current;
+    setTradeErrorToast({ id, message });
+    tradeToastTimerRef.current = window.setTimeout(() => {
+      setTradeErrorToast((current) => current?.id === id ? null : current);
+      tradeToastTimerRef.current = null;
+    }, 8000);
+  }, []);
+
   const handleFeedStatus = useCallback((status: typeof marketFeedStatus) => {
     setMarketFeedStatus(status);
-    if (status !== "Live" && botRuntimeRef.current.running) {
-      botRuntimeRef.current.running = false;
-      setBotRunning(false);
-      setBotStatus("Market feed interrupted. Bot stopped.");
-    }
   }, []);
 
   const handleMarketSignal = useCallback((signal: MarketSignal) => {
     const runtime = botRuntimeRef.current;
-    if (!signal.ready || !runtime.running || runtime.inFlight || !signal.crossover) return;
+    if (
+      !signal.ready ||
+      !runtime.running ||
+      runtime.inFlight ||
+      marketFeedStatusRef.current !== "Live" ||
+      !signal.crossover
+    ) return;
 
     const config = botConfigRef.current;
     if (runtime.sessionProfit >= config.targetProfit || runtime.sessionProfit <= -config.targetLoss) {
@@ -271,12 +302,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
     const contractType = signal.crossover;
     const stake = runtime.nextStake ?? config.stakeAmount;
-    if (stake > account.balance) {
-      runtime.running = false;
-      setBotRunning(false);
-      setBotStatus("Next stake exceeds the selected account balance. Bot stopped.");
-      return;
-    }
 
     runtime.inFlight = true;
     setTradeInProgress(true);
@@ -305,10 +330,14 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
           runtime.running = false;
           setBotRunning(false);
           if (!tradeMayBeOpen) setOpenTradeDetails(null);
+          const errorMessage = typeof result.error === "string"
+            ? result.error
+            : "Trade failed. The bot was stopped.";
+          notifyTradeError(errorMessage);
           setBotStatus(
             tradeMayBeOpen
               ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
-              : typeof result.error === "string" ? result.error : "Trade failed. Bot stopped.",
+              : errorMessage,
           );
           return;
         }
@@ -410,6 +439,9 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
                 : typeof update.error === "string" ? update.error : "Trade failed. Bot stopped.",
             );
+            notifyTradeError(
+              typeof update.error === "string" ? update.error : "Trade failed. The bot was stopped.",
+            );
             streamFailed = true;
             return;
           }
@@ -470,10 +502,12 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         runtime.unresolvedTrade = true;
         runtime.running = false;
         setBotRunning(false);
+        const errorMessage = error instanceof Error
+          ? error.message
+          : "Trade result could not be confirmed.";
+        notifyTradeError(`${errorMessage} Check Deriv positions before restarting.`);
         setBotStatus(
-          error instanceof Error
-            ? `${error.message} Check Deriv positions before restarting.`
-            : "Trade result unconfirmed. Check Deriv positions before restarting.",
+          `${errorMessage} Check Deriv positions before restarting.`,
         );
       } finally {
         if (!runtime.unresolvedTrade) runtime.inFlight = false;
@@ -481,7 +515,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         if (!runtime.unresolvedTrade) setTradeProgressTicks(0);
       }
     })();
-  }, []);
+  }, [notifyTradeError]);
 
   const disconnectDeriv = async () => {
     botRuntimeRef.current.running = false;
@@ -611,6 +645,25 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
 
   return (
     <main className="dashboard-shell">
+      {tradeErrorToast && (
+        <div className="trade-error-toast" role="alert" key={tradeErrorToast.id}>
+          <AlertTriangle size={18} aria-hidden="true" />
+          <span>{tradeErrorToast.message}</span>
+          <button
+            type="button"
+            aria-label="Dismiss trade error"
+            onClick={() => {
+              if (tradeToastTimerRef.current !== null) {
+                window.clearTimeout(tradeToastTimerRef.current);
+                tradeToastTimerRef.current = null;
+              }
+              setTradeErrorToast(null);
+            }}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      )}
       <header className="dashboard-header">
         <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
           <span className="dashboard-brand-icon"><Bot size={19} strokeWidth={2.2} /></span>
