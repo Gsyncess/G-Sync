@@ -875,6 +875,13 @@ input {
   color: #c65050;
 }
 
+.history-direction-label {
+  margin-left: 6px;
+  color: #536176;
+  font-size: 9px;
+  font-weight: 700;
+}
+
 .history-table .performance-positive {
   color: #168c7a;
   font-weight: 700;

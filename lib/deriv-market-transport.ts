@@ -21,6 +21,7 @@ type Subscription = {
   request: DerivMarketSubscriptionRequest;
   callbacks: Set<(quote: DerivMarketQuote) => void>;
   id?: string;
+  openingGeneration?: number;
 };
 
 type PendingRequest = {
@@ -43,6 +44,7 @@ export class DerivMarketTransport {
   private pending = new Map<number, PendingRequest>();
   private subscriptions = new Map<string, Subscription>();
   private opening: Promise<void> | null = null;
+  private connectionGeneration = 0;
 
   constructor(
     private readonly onStatus: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void,
@@ -54,21 +56,35 @@ export class DerivMarketTransport {
   private connect() {
     if (this.closed) return;
     this.onStatus(this.socket ? "Reconnecting" : "Connecting");
-    this.opening = new Promise((resolve, reject) => {
+    const generation = ++this.connectionGeneration;
+    this.opening = new Promise((resolve) => {
       const socket = new WebSocket(DERIV_PUBLIC_WEBSOCKET);
       this.socket = socket;
       socket.onopen = () => {
+        if (this.closed || this.socket !== socket) {
+          socket.close();
+          return;
+        }
         this.reconnectDelay = 1000;
-        this.onStatus("Live");
         resolve();
         this.subscriptions.forEach((subscription, key) => {
-          void this.openSubscription(key, subscription);
+          void this.openSubscription(key, subscription, generation);
         });
       };
-      socket.onmessage = (event) => this.handleMessage(String(event.data));
-      socket.onerror = () => this.onStatus("Reconnecting");
+      socket.onmessage = (event) => {
+        if (this.socket === socket) this.handleMessage(String(event.data));
+      };
+      socket.onerror = () => {
+        if (this.socket === socket) this.onStatus("Reconnecting");
+      };
       socket.onclose = () => {
-        reject(new Error("Deriv connection closed."));
+        resolve();
+        if (this.socket !== socket) return;
+        this.socket = null;
+        this.subscriptions.forEach((subscription) => {
+          subscription.id = undefined;
+          subscription.openingGeneration = undefined;
+        });
         if (this.closed) return;
         this.onStatus("Reconnecting");
         this.pending.forEach(({ reject: rejectRequest, timeout }) => {
@@ -76,7 +92,10 @@ export class DerivMarketTransport {
           rejectRequest(new Error("Deriv connection closed."));
         });
         this.pending.clear();
-        this.reconnectTimer = window.setTimeout(() => this.connect(), this.reconnectDelay);
+        this.reconnectTimer = window.setTimeout(() => {
+          this.reconnectTimer = undefined;
+          this.connect();
+        }, this.reconnectDelay);
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 15000);
       };
     });
@@ -122,11 +141,19 @@ export class DerivMarketTransport {
     }
   }
 
-  private async send(request: Record<string, unknown>): Promise<DerivResponse> {
+  private async send(request: Record<string, unknown>, generation: number): Promise<DerivResponse> {
+    if (this.connectionGeneration !== generation) {
+      throw new Error("Deriv connection changed before the request was sent.");
+    }
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       await this.opening;
     }
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+    const socket = this.socket;
+    if (
+      this.connectionGeneration !== generation ||
+      !socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
       throw new Error("Deriv connection is not available.");
     }
 
@@ -137,11 +164,23 @@ export class DerivMarketTransport {
         reject(new Error("Deriv request timed out."));
       }, 15000);
       this.pending.set(reqId, { resolve, reject, timeout });
-      this.socket?.send(JSON.stringify({ ...request, req_id: reqId }));
+      try {
+        socket.send(JSON.stringify({ ...request, req_id: reqId }));
+      } catch (error) {
+        window.clearTimeout(timeout);
+        this.pending.delete(reqId);
+        reject(error instanceof Error ? error : new Error("Could not send the Deriv request."));
+      }
     });
   }
 
-  private async openSubscription(key: string, subscription: Subscription) {
+  private async openSubscription(key: string, subscription: Subscription, generation = this.connectionGeneration) {
+    if (
+      subscription.openingGeneration === generation ||
+      subscription.id ||
+      this.closed
+    ) return;
+    subscription.openingGeneration = generation;
     const request = subscription.request;
     try {
       const response = await this.send({
@@ -151,18 +190,36 @@ export class DerivMarketTransport {
         adjust_start_time: 1,
         count: 1,
         end: "latest",
-      });
+      }, generation);
       if (response.error) throw new Error(response.error.message ?? "Deriv subscription failed.");
+      if (this.connectionGeneration !== generation) return;
       if (this.subscriptions.get(key) === subscription) {
         subscription.id = response.subscription?.id;
+        this.reconnectDelay = 1000;
+        this.onStatus("Live");
       } else if (response.subscription?.id) {
-        void this.send({ forget: response.subscription.id }).catch((error: unknown) => {
+        void this.send({ forget: response.subscription.id }, generation).catch((error: unknown) => {
           this.onError(error instanceof Error ? error : new Error("Could not close the market subscription."));
         });
       }
     } catch (error) {
+      if (this.connectionGeneration !== generation || this.closed) return;
+      subscription.openingGeneration = undefined;
       this.onStatus("Unavailable");
       this.onError(error instanceof Error ? error : new Error("Deriv market subscription failed."));
+      const retryDelay = this.reconnectDelay;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 15000);
+      window.setTimeout(() => {
+        if (this.closed || this.subscriptions.get(key) !== subscription) return;
+        if (this.socket?.readyState === WebSocket.OPEN) {
+          void this.openSubscription(key, subscription);
+        } else if (
+          this.reconnectTimer === undefined &&
+          (!this.socket || this.socket.readyState === WebSocket.CLOSED)
+        ) {
+          this.connect();
+        }
+      }, retryDelay);
     }
   }
 
@@ -172,9 +229,11 @@ export class DerivMarketTransport {
     if (!subscription) {
       subscription = { request, callbacks: new Set() };
       this.subscriptions.set(key, subscription);
-      void this.openSubscription(key, subscription);
     }
     subscription.callbacks.add(callback);
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      void this.openSubscription(key, subscription);
+    }
 
     return () => {
       const current = this.subscriptions.get(key);
@@ -189,7 +248,7 @@ export class DerivMarketTransport {
     if (!subscription) return;
     this.subscriptions.delete(key);
     if (subscription.id) {
-      void this.send({ forget: subscription.id }).catch((error: unknown) => {
+      void this.send({ forget: subscription.id }, this.connectionGeneration).catch((error: unknown) => {
         this.onError(error instanceof Error ? error : new Error("Could not close the market subscription."));
       });
     }
@@ -197,7 +256,10 @@ export class DerivMarketTransport {
 
   close() {
     this.closed = true;
-    if (this.reconnectTimer !== undefined) window.clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer !== undefined) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.pending.forEach(({ reject, timeout }) => {
       window.clearTimeout(timeout);
       reject(new Error("Deriv connection was closed."));

@@ -92,7 +92,7 @@ export function SignalPage({
       </div>
       <p className="signal-config-warning" role="note">
         <AlertTriangle size={15} aria-hidden="true" />
-        <span>Trading involves risk. After a loss, the next stake increases by 1.5× until a win or your session limit is reached.</span>
+        <span>Trading involves risk. Set limits carefully and only trade with funds you can afford to lose.</span>
       </p>
     </section>
   );

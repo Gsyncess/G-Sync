@@ -446,7 +446,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     setTradeInProgress(true);
     setTradeProgressTicks(0);
     setOpenTradeDetails(null);
-    setBotStatus(`${contractType} · placing 5-tick contract`);
+    setBotStatus(`${contractType === "CALL" ? "BUY" : "SELL"} · trade in progress`);
     void (async () => {
       try {
         const response = await fetch("/api/deriv/bot-trade", {
@@ -634,7 +634,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         } else {
           setBotStatus(
             runtime.running
-              ? `${profit >= 0 ? "Trade won" : "Trade lost"} · ${profit >= 0 ? "base stake restored" : "next stake ×1.5"}`
+              ? (profit >= 0 ? "Trade won" : "Trade lost")
               : "Bot stopped · current trade settled",
           );
         }
@@ -971,10 +971,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 <div
                   className="bot-trade-progress-track"
                   role="progressbar"
-                  aria-label="5-tick trade progress"
+                  aria-label="Trade progress"
                   aria-valuemin={0}
-                  aria-valuemax={5}
-                  aria-valuenow={tradeProgressTicks}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round((tradeProgressTicks / 5) * 100)}
                   aria-valuetext={tradeInProgress ? "Trade is being processed and awaiting settlement" : "No open trade"}
                 >
                   <span style={{ width: `${(tradeProgressTicks / 5) * 100}%` }} />
@@ -982,10 +982,9 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 <div className="bot-trade-values" aria-live="polite">
                   {openTradeDetails ? (
                     <>
-                      <span>{openTradeDetails.contractType}</span>
+                      <span>{openTradeDetails.contractType === "CALL" ? "BUY" : "SELL"}</span>
                       <span>Stake {formatTradeAmount(openTradeDetails.stake, openTradeDetails.currency)}</span>
                       <span>Potential payout {formatTradeAmount(openTradeDetails.payout, openTradeDetails.currency)}</span>
-                      <span>{tradeProgressTicks} / 5 ticks</span>
                     </>
                   ) : tradeInProgress ? (
                     <span>Waiting for Deriv contract details…</span>
@@ -1019,8 +1018,8 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 {botRuntimeRef.current.unresolvedTrade
                   ? "A trade result is unconfirmed. Verify open positions in Deriv before reloading or restarting."
                   : selectedDerivAccount?.accountType === "real"
-                    ? "Real account selected. Starting the bot can place live trades using 5-tick contracts."
-                    : "Bot signals use MACD crossovers. Contracts run for 5 ticks; the next stake rises 1.5× after a loss."}
+                    ? "Real account selected. Starting the bot can place live trades."
+                    : "Demo account selected. Your configured session limits are active."}
               </p>
             </div>
         </div>
@@ -1062,12 +1061,15 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                             <span
                               className={`history-direction history-direction-${trade.contractType.toLowerCase()}`}
                               role="img"
-                              aria-label={trade.contractType === "CALL" ? "Call direction" : "Put direction"}
-                              title={trade.contractType === "CALL" ? "Call" : "Put"}
+                              aria-label={trade.contractType === "CALL" ? "Buy" : "Sell"}
+                              title={trade.contractType === "CALL" ? "Buy" : "Sell"}
                             >
                               {trade.contractType === "CALL"
                                 ? <ArrowUpRight size={17} aria-hidden="true" />
                                 : <ArrowDownRight size={17} aria-hidden="true" />}
+                            </span>
+                            <span className="history-direction-label">
+                              {trade.contractType === "CALL" ? "BUY" : "SELL"}
                             </span>
                           </td>
                           <td>{formatTradeAmount(trade.stake, trade.currency)}</td>

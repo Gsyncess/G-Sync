@@ -16,11 +16,7 @@ type IndicatorState = {
   signal: number | null;
   ticks: number;
   previousHistogram: number | null;
-  prices: number[];
-  lastSupport: number | null;
-  lastResistance: number | null;
-  lastSupportTick: number;
-  lastResistanceTick: number;
+  lastTickIdentity: string | null;
 };
 
 export type MarketSignal = {
@@ -39,8 +35,8 @@ type MarketConsoleProps = {
 
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
-const ANALYSIS_WINDOW = 40;
 const SCAN_INTERVAL = 20;
+const INDICATOR_WARMUP_TICKS = 100;
 
 export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
@@ -52,11 +48,7 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
     signal: null,
     ticks: 0,
     previousHistogram: null,
-    prices: [],
-    lastSupport: null,
-    lastResistance: null,
-    lastSupportTick: 0,
-    lastResistanceTick: 0,
+    lastTickIdentity: null,
   });
 
   useEffect(() => {
@@ -76,6 +68,24 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
     const transport = new DerivMarketTransport(
       (status) => {
         if (!active) return;
+        if (status === "Reconnecting" || status === "Unavailable") {
+          indicatorRef.current = {
+            fast: null,
+            slow: null,
+            signal: null,
+            ticks: 0,
+            previousHistogram: null,
+            lastTickIdentity: null,
+          };
+          onMarketSignal?.({
+            price: 0,
+            macd: 0,
+            signal: 0,
+            bias: "neutral",
+            ready: false,
+            crossover: null,
+          });
+        }
         onFeedStatus?.(status);
         appendEntry(
           status === "Live"
@@ -92,47 +102,30 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
       (quote: DerivMarketQuote) => {
         const price = quote.Close;
         const state = indicatorRef.current;
+        const tickId = quote.tick?.id;
+        const tickEpoch = quote.tick?.epoch;
+        const tickIdentity = tickId !== undefined
+          ? String(tickId)
+          : `${String(tickEpoch ?? quote.Date)}:${price}`;
+        if (state.lastTickIdentity === tickIdentity) return;
+        state.lastTickIdentity = tickIdentity;
         state.fast = state.fast === null ? price : state.fast + (2 / 13) * (price - state.fast);
         state.slow = state.slow === null ? price : state.slow + (2 / 27) * (price - state.slow);
         const macd = state.fast - state.slow;
         state.signal = state.signal === null ? macd : state.signal + (2 / 10) * (macd - state.signal);
         state.ticks += 1;
-        const ready = state.ticks >= 26;
+        const ready = state.ticks >= INDICATOR_WARMUP_TICKS;
         const histogram = macd - state.signal;
-        const crossover = state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
+        const crossover = ready && state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
           ? "CALL"
-          : state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
+          : ready && state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
             ? "PUT"
             : null;
         state.previousHistogram = histogram;
         const bias = histogram > 0 ? "bullish" : histogram < 0 ? "bearish" : "neutral";
-        state.prices.push(price);
-        if (state.prices.length > ANALYSIS_WINDOW) state.prices.shift();
 
         if (ready && state.ticks % SCAN_INTERVAL === 0) {
           appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
-        }
-
-        if (ready && state.prices.length === ANALYSIS_WINDOW && state.ticks % 8 === 0) {
-          const support = Math.min(...state.prices);
-          const resistance = Math.max(...state.prices);
-          const levelThreshold = Math.max(price * 0.0001, 0.01);
-          if (
-            (state.lastSupport === null || Math.abs(support - state.lastSupport) >= levelThreshold) &&
-            state.ticks - state.lastSupportTick >= 8
-          ) {
-            appendEntry("Support · zone identified", "neutral", quote.DT);
-            state.lastSupport = support;
-            state.lastSupportTick = state.ticks;
-          }
-          if (
-            (state.lastResistance === null || Math.abs(resistance - state.lastResistance) >= levelThreshold) &&
-            state.ticks - state.lastResistanceTick >= 8
-          ) {
-            appendEntry("Resistance · zone identified", "neutral", quote.DT);
-            state.lastResistance = resistance;
-            state.lastResistanceTick = state.ticks;
-          }
         }
 
         onMarketSignal?.({
@@ -145,7 +138,7 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         });
 
         if (ready && crossover) {
-          appendEntry(`Signal · ${crossover} opportunity`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
+          appendEntry(`Signal · ${crossover === "CALL" ? "BUY" : "SELL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
         }
       },
     );

@@ -34,9 +34,13 @@ export function MobileAuth() {
   const [realtimeLatency, setRealtimeLatency] = useState<number | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
+  const [splashComplete, setSplashComplete] = useState(false);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setScreen("login"), 8000);
+    const timer = window.setTimeout(() => {
+      setSplashComplete(true);
+      setScreen("login");
+    }, 8000);
     const socket = io({
       autoConnect: false,
       reconnectionAttempts: 8,
@@ -156,7 +160,7 @@ export function MobileAuth() {
     document.body.style.color = "#17213a";
   }, [shellBackground, isSplash]);
 
-  if (authenticated) {
+  if (authenticated && splashComplete) {
     return (
       <DashboardHome
         email={accountEmail}
