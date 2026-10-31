@@ -167,7 +167,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   derivConnectedRef.current = derivConnected;
   const marketFeedStatusRef = useRef(marketFeedStatus);
   marketFeedStatusRef.current = marketFeedStatus;
-  const latestMarketSignalRef = useRef<MarketSignal | null>(null);
   const tradeToastTimerRef = useRef<number | null>(null);
   const tradeToastIdRef = useRef(0);
   const balanceRefreshRef = useRef(false);
@@ -457,7 +456,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   }, []);
 
   const handleMarketSignal = useCallback((signal: MarketSignal) => {
-    latestMarketSignalRef.current = signal;
     const runtime = botRuntimeRef.current;
     if (
       !signal.ready ||
@@ -783,13 +781,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         ? "Watching market · real-account trades enabled"
         : "Watching market · demo account",
     );
-    const latestSignal = latestMarketSignalRef.current;
-    if (latestSignal?.ready && latestSignal.bias !== "neutral") {
-      handleMarketSignal({
-        ...latestSignal,
-        tradeSignal: latestSignal.bias === "bullish" ? "CALL" : "PUT",
-      });
-    }
   };
 
   const handleStopBot = () => {

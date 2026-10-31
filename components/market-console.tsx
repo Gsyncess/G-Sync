@@ -10,20 +10,15 @@ type ConsoleEntry = {
   level: "info" | "price-up" | "price-down" | "price-neutral" | "bullish" | "bearish" | "neutral" | "error";
 };
 
-type IndicatorState = {
-  fast: number | null;
-  slow: number | null;
-  signal: number | null;
+type BreakoutState = {
+  prices: number[];
   ticks: number;
-  previousHistogram: number | null;
+  previousPrice: number | null;
   lastTickIdentity: string | null;
 };
 
 export type MarketSignal = {
   price: number;
-  macd: number;
-  signal: number;
-  bias: "bullish" | "bearish" | "neutral";
   ready: boolean;
   tradeSignal: "CALL" | "PUT" | null;
 };
@@ -37,7 +32,7 @@ type MarketConsoleProps = {
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
 const SCAN_INTERVAL = 20;
-const INDICATOR_WARMUP_TICKS = 35;
+const BREAKOUT_LOOKBACK_TICKS = 30;
 
 export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
@@ -47,12 +42,10 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
   isBotRunningRef.current = isBotRunning;
   const logEntryRef = useRef<((message: string, level?: ConsoleEntry["level"], time?: Date) => void) | null>(null);
   const recentEntryRef = useRef<{ key: string; timestamp: number } | null>(null);
-  const indicatorRef = useRef<IndicatorState>({
-    fast: null,
-    slow: null,
-    signal: null,
+  const breakoutRef = useRef<BreakoutState>({
+    prices: [],
     ticks: 0,
-    previousHistogram: null,
+    previousPrice: null,
     lastTickIdentity: null,
   });
 
@@ -78,19 +71,14 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       (status) => {
         if (!active) return;
         if (status === "Reconnecting" || status === "Unavailable") {
-          indicatorRef.current = {
-            fast: null,
-            slow: null,
-            signal: null,
+          breakoutRef.current = {
+            prices: [],
             ticks: 0,
-            previousHistogram: null,
+            previousPrice: null,
             lastTickIdentity: null,
           };
           onMarketSignal?.({
             price: 0,
-            macd: 0,
-            signal: 0,
-            bias: "neutral",
             ready: false,
             tradeSignal: null,
           });
@@ -110,7 +98,7 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
       { symbol: MARKET_SYMBOL },
       (quote: DerivMarketQuote) => {
         const price = quote.Close;
-        const state = indicatorRef.current;
+        const state = breakoutRef.current;
         const tickId = quote.tick?.id;
         const tickEpoch = quote.tick?.epoch;
         const tickIdentity = tickId !== undefined
@@ -118,24 +106,20 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
           : `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
-        state.fast = state.fast === null ? price : state.fast + (2 / 13) * (price - state.fast);
-        state.slow = state.slow === null ? price : state.slow + (2 / 27) * (price - state.slow);
-        const macd = state.fast - state.slow;
-        state.signal = state.signal === null ? macd : state.signal + (2 / 10) * (macd - state.signal);
         state.ticks += 1;
-        const ready = state.ticks >= INDICATOR_WARMUP_TICKS;
-        const histogram = macd - state.signal;
-        const tradeSignal = !ready
-          ? null
-          : state.ticks === INDICATOR_WARMUP_TICKS
-            ? histogram > 0 ? "CALL" : histogram < 0 ? "PUT" : null
-            : state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
-              ? "CALL"
-              : state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
-                ? "PUT"
-                : null;
-        state.previousHistogram = histogram;
-        const bias = histogram > 0 ? "bullish" : histogram < 0 ? "bearish" : "neutral";
+        const ready = state.prices.length >= BREAKOUT_LOOKBACK_TICKS;
+        const rangeHigh = ready ? Math.max(...state.prices) : null;
+        const rangeLow = ready ? Math.min(...state.prices) : null;
+        const tradeSignal = ready && state.previousPrice !== null && rangeHigh !== null && rangeLow !== null
+          ? state.previousPrice <= rangeHigh && price > rangeHigh
+            ? "CALL"
+            : state.previousPrice >= rangeLow && price < rangeLow
+              ? "PUT"
+              : null
+          : null;
+        state.prices.push(price);
+        if (state.prices.length > BREAKOUT_LOOKBACK_TICKS) state.prices.shift();
+        state.previousPrice = price;
 
         if (ready && state.ticks % SCAN_INTERVAL === 0) {
           appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
@@ -143,9 +127,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
 
         onMarketSignal?.({
           price,
-          macd,
-          signal: state.signal,
-          bias,
           ready,
           tradeSignal,
         });
