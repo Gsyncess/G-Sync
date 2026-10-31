@@ -361,6 +361,19 @@ input {
   scrollbar-width: none;
 }
 
+.dashboard-content-pinned {
+  overflow: hidden;
+}
+
+.dashboard-content-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  scrollbar-width: thin;
+  scrollbar-color: #cbd4df transparent;
+}
+
 .dashboard-content::-webkit-scrollbar {
   display: none;
 }
@@ -721,9 +734,14 @@ input {
 
 .dashboard-config-view,
 .dashboard-history-view {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+  width: 100%;
+}
+
+.dashboard-content-scroll .dashboard-config-view,
+.dashboard-content-scroll .dashboard-history-view {
+  flex: 0 0 auto;
+  min-height: 100%;
+  overflow: visible;
 }
 
 .dashboard-home-view[hidden],
@@ -734,6 +752,13 @@ input {
 
 .history-panel {
   padding: 18px;
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.history-panel:hover,
+.signal-config-panel:hover {
+  border-color: #dce5ed;
+  box-shadow: 0 8px 24px rgb(26 43 70 / 7%);
 }
 
 .history-heading {
@@ -837,6 +862,7 @@ input {
   display: flex;
   flex-direction: column;
   padding: 22px;
+  transition: box-shadow 180ms ease, border-color 180ms ease;
 }
 
 .signal-config-heading {

@@ -31,7 +31,7 @@ type DerivSessionResponse = {
   error?: string;
 };
 
-type SessionPerformance = {
+type AccountPerformance = {
   profit: number;
   wins: number;
   losses: number;
@@ -107,20 +107,22 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [activeView, setActiveView] = useState<"home" | "signals" | "history">("home");
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
   const [historyReady, setHistoryReady] = useState(false);
-  const [performance, setPerformance] = useState<SessionPerformance>({
-    profit: 0,
-    wins: 0,
-    losses: 0,
-    trades: 0,
-  });
-  const selectedDerivAccount = derivAccounts.find(
-    (account) => account.accountId === selectedDerivAccountId,
-  );
+  const [historyAccountId, setHistoryAccountId] = useState("");
   const [botConfig, setBotConfig] = useState<SignalConfig>({
     targetProfit: 20,
     targetLoss: 10,
     stakeAmount: 5,
   });
+  const selectedDerivAccount = derivAccounts.find(
+    (account) => account.accountId === selectedDerivAccountId,
+  );
+  const accountTrades = historyAccountId === selectedDerivAccountId ? tradeHistory : [];
+  const accountPerformance = accountTrades.reduce<AccountPerformance>((summary, trade) => ({
+    profit: summary.profit + trade.profit,
+    wins: summary.wins + (trade.profit > 0 ? 1 : 0),
+    losses: summary.losses + (trade.profit < 0 ? 1 : 0),
+    trades: summary.trades + 1,
+  }), { profit: 0, wins: 0, losses: 0, trades: 0 });
   const derivMenuRef = useRef<HTMLDivElement>(null);
   const botConfigRef = useRef(botConfig);
   botConfigRef.current = botConfig;
@@ -200,6 +202,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     setHistoryReady(false);
     if (!selectedDerivAccountId) {
       setTradeHistory([]);
+      setHistoryAccountId("");
       setHistoryReady(true);
       return;
     }
@@ -212,9 +215,11 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         const parsed: unknown = JSON.parse(saved);
         setTradeHistory(Array.isArray(parsed) ? parsed.filter(isTradeHistoryEntry).slice(0, 100) : []);
       }
+      setHistoryAccountId(selectedDerivAccountId);
     } catch (error) {
       console.warn("Could not load saved Deriv bot history.", error);
       setTradeHistory([]);
+      setHistoryAccountId(selectedDerivAccountId);
       setDerivMessage("Saved trade history could not be loaded.");
     } finally {
       setHistoryReady(true);
@@ -222,7 +227,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   }, [selectedDerivAccountId]);
 
   useEffect(() => {
-    if (!historyReady || !selectedDerivAccountId) return;
+    if (!historyReady || !selectedDerivAccountId || historyAccountId !== selectedDerivAccountId) return;
     try {
       window.localStorage.setItem(
         `deriv-bot-history:${selectedDerivAccountId}`,
@@ -232,7 +237,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       console.warn("Could not save Deriv bot history.", error);
       setDerivMessage("Trade history could not be saved on this device.");
     }
-  }, [historyReady, selectedDerivAccountId, tradeHistory]);
+  }, [historyAccountId, historyReady, selectedDerivAccountId, tradeHistory]);
 
   useEffect(() => {
     if (!derivMenuOpen) return;
@@ -475,12 +480,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         } else if (profit < 0) {
           runtime.nextStake = Number((stake * 1.5).toFixed(2));
         }
-        setPerformance((current) => ({
-          profit: current.profit + profit,
-          wins: current.wins + (profit > 0 ? 1 : 0),
-          losses: current.losses + (profit < 0 ? 1 : 0),
-          trades: current.trades + 1,
-        }));
 
         if (runtime.sessionProfit >= botConfigRef.current.targetProfit) {
           runtime.running = false;
@@ -529,7 +528,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       setDerivAccounts([]);
       setSelectedDerivAccountId("");
       setDerivMenuOpen(false);
-      setPerformance({ profit: 0, wins: 0, losses: 0, trades: 0 });
       window.localStorage.removeItem("deriv-account-id");
       setDerivMessage("Your Deriv account has been disconnected.");
     } catch (error) {
@@ -623,14 +621,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       ? "Unknown time"
       : parsedDate.toLocaleString();
   };
-  const decidedTrades = performance.wins + performance.losses;
+  const decidedTrades = accountPerformance.wins + accountPerformance.losses;
   const hasReliableWinRate = decidedTrades >= 5;
   const winRate = hasReliableWinRate
-    ? Math.round((performance.wins / decidedTrades) * 100)
+    ? Math.round((accountPerformance.wins / decidedTrades) * 100)
     : 0;
   const selectDerivAccount = (account: DerivAccount) => {
     if (botRuntimeRef.current.running || botRuntimeRef.current.inFlight) return;
-    setPerformance({ profit: 0, wins: 0, losses: 0, trades: 0 });
     botRuntimeRef.current = {
       running: false,
       inFlight: false,
@@ -752,7 +749,10 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         </div>
       </header>
 
-      <section className="dashboard-content" aria-label="Dashboard pages">
+      <section
+        className={`dashboard-content ${activeView === "home" ? "dashboard-content-pinned" : "dashboard-content-scroll"}`}
+        aria-label="Dashboard pages"
+      >
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
             <div className="dashboard-greeting">
               <div>
@@ -776,7 +776,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
               <div className="performance-heading">
                 <div>
                   <h2>Bot performance</h2>
-                  <p>Session summary</p>
+                  <p>Saved account results · latest 100 trades</p>
                 </div>
                 <button type="button" className="help-button" aria-label="Performance help" title="Performance updates after your Deriv account is connected">
                   <CircleHelp size={17} />
@@ -786,32 +786,32 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
                 <div className="performance-metric">
                   <span>P/L</span>
                   <strong
-                    key={`profit-${performance.trades}`}
-                    className={performance.profit > 0 ? "performance-positive" : performance.profit < 0 ? "performance-negative" : ""}
+                    key={`profit-${accountPerformance.trades}`}
+                    className={accountPerformance.profit > 0 ? "performance-positive" : accountPerformance.profit < 0 ? "performance-negative" : ""}
                   >
-                    {derivConnected ? formatPerformanceAmount(performance.profit) : "--"}
+                    {derivConnected ? formatPerformanceAmount(accountPerformance.profit) : "--"}
                   </strong>
                 </div>
                 <div className="performance-metric">
                   <span>W</span>
-                  <strong key={`wins-${performance.trades}`}>{performance.wins}</strong>
+                  <strong key={`wins-${accountPerformance.trades}`}>{accountPerformance.wins}</strong>
                 </div>
                 <div className="performance-metric">
                   <span>L</span>
-                  <strong key={`losses-${performance.trades}`}>{performance.losses}</strong>
+                  <strong key={`losses-${accountPerformance.trades}`}>{accountPerformance.losses}</strong>
                 </div>
                 <div className="performance-metric performance-rate">
-                  <span>Rate (5+)</span>
+                  <span>Win rate</span>
                   <div
                     className="rate-ring"
-                    title="Win rate is shown after at least five decided trades; breakeven trades are excluded."
+                    title="Based on saved completed trades for this account; breakeven trades are excluded. Shown after five decided trades."
                     style={{
                       background: `conic-gradient(#168c7a ${winRate}%, #e4eaf0 ${winRate}% 100%)`,
                     }}
                     aria-label={
                       hasReliableWinRate
                         ? `Win rate ${winRate} percent from ${decidedTrades} trades`
-                        : `Win rate available after five decided trades; ${decidedTrades} completed`
+                        : `Win rate shown after five decided trades; ${decidedTrades} decided so far`
                     }
                   >
                     <span>{hasReliableWinRate ? `${winRate}%` : "--"}</span>
