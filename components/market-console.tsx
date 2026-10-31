@@ -25,7 +25,7 @@ export type MarketSignal = {
   signal: number;
   bias: "bullish" | "bearish" | "neutral";
   ready: boolean;
-  crossover: "CALL" | "PUT" | null;
+  tradeSignal: "CALL" | "PUT" | null;
 };
 
 type MarketConsoleProps = {
@@ -36,7 +36,7 @@ type MarketConsoleProps = {
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
 const SCAN_INTERVAL = 20;
-const INDICATOR_WARMUP_TICKS = 100;
+const INDICATOR_WARMUP_TICKS = 35;
 
 export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
@@ -83,7 +83,7 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
             signal: 0,
             bias: "neutral",
             ready: false,
-            crossover: null,
+            tradeSignal: null,
           });
         }
         onFeedStatus?.(status);
@@ -116,11 +116,15 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         state.ticks += 1;
         const ready = state.ticks >= INDICATOR_WARMUP_TICKS;
         const histogram = macd - state.signal;
-        const crossover = ready && state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
-          ? "CALL"
-          : ready && state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
-            ? "PUT"
-            : null;
+        const tradeSignal = !ready
+          ? null
+          : state.ticks === INDICATOR_WARMUP_TICKS
+            ? histogram > 0 ? "CALL" : histogram < 0 ? "PUT" : null
+            : state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
+              ? "CALL"
+              : state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
+                ? "PUT"
+                : null;
         state.previousHistogram = histogram;
         const bias = histogram > 0 ? "bullish" : histogram < 0 ? "bearish" : "neutral";
 
@@ -134,11 +138,11 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
           signal: state.signal,
           bias,
           ready,
-          crossover,
+          tradeSignal,
         });
 
-        if (ready && crossover) {
-          appendEntry(`Signal · ${crossover === "CALL" ? "BUY" : "SELL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
+        if (ready && tradeSignal) {
+          appendEntry(`Signal · ${tradeSignal === "CALL" ? "BUY" : "SELL"}`, tradeSignal === "CALL" ? "bullish" : "bearish", quote.DT);
         }
       },
     );

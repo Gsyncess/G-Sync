@@ -54,12 +54,11 @@ const securityHeaders = {
 
 const oauthCookiePath = "/api/deriv/oauth/";
 const derivCookiePath = "/api/deriv";
-const derivSessionStore = new Map<string, {
+const derivTokenRefreshes = new Map<string, Promise<{
   accessToken: string;
   refreshToken: string;
-  expiresAt: number;
-  accountId: string | null;
-}>();
+  expiresIn: number;
+} | null>>();
 const activeDerivTrades = new Set<string>();
 
 function appendCookie(
@@ -106,65 +105,81 @@ function readEncodedCookie(request: express.Request, name: string) {
   return value ? Buffer.from(value, "base64url").toString("utf8") : null;
 }
 
-function saveDerivSession(sessionKey: string, payload: { accessToken: string; refreshToken?: string; expiresIn?: number; accountId?: string | null }) {
-  const expiresInMs = Number.isFinite(payload.expiresIn) && payload.expiresIn! > 0
-    ? payload.expiresIn! * 1000
-    : 60 * 60 * 1000;
-  derivSessionStore.set(sessionKey, {
-    accessToken: payload.accessToken,
-    refreshToken: payload.refreshToken ?? "",
-    expiresAt: Date.now() + expiresInMs,
-    accountId: payload.accountId ?? null,
-  });
-}
-
 async function refreshDerivAccessToken(request: express.Request, response: express.Response) {
   const refreshToken = readEncodedCookie(request, "deriv_refresh_token");
   if (!refreshToken) return null;
 
+  const refreshKey = createHash("sha256").update(refreshToken).digest("hex");
+  let refreshPromise = derivTokenRefreshes.get(refreshKey);
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: derivAppId ?? "",
+          refresh_token: refreshToken,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (tokenResponse.status === 400 || tokenResponse.status === 401) return null;
+      if (!tokenResponse.ok) {
+        throw new Error(`Deriv token refresh failed with status ${tokenResponse.status}.`);
+      }
+
+      const tokenData = (await tokenResponse.json()) as {
+        access_token?: unknown;
+        refresh_token?: unknown;
+        expires_in?: unknown;
+      };
+      if (
+        typeof tokenData.access_token !== "string" ||
+        typeof tokenData.expires_in !== "number" ||
+        !Number.isFinite(tokenData.expires_in) ||
+        tokenData.expires_in <= 0
+      ) {
+        throw new Error("Deriv returned an invalid refreshed token.");
+      }
+      return {
+        accessToken: tokenData.access_token,
+        refreshToken: typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : refreshToken,
+        expiresIn: tokenData.expires_in,
+      };
+    })();
+    derivTokenRefreshes.set(refreshKey, refreshPromise);
+  }
+
+  let tokens: Awaited<typeof refreshPromise>;
   try {
-    const tokenResponse = await fetch("https://auth.deriv.com/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        client_id: derivAppId ?? "",
-        refresh_token: refreshToken,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      clearCookie(response, "deriv_access_token", derivCookiePath);
-      clearCookie(response, "deriv_refresh_token", derivCookiePath);
-      derivSessionStore.delete("default");
-      return null;
+    tokens = await refreshPromise;
+  } finally {
+    if (derivTokenRefreshes.get(refreshKey) === refreshPromise) {
+      derivTokenRefreshes.delete(refreshKey);
     }
-
-    const tokenData = (await tokenResponse.json()) as {
-      access_token?: unknown;
-      refresh_token?: unknown;
-      expires_in?: unknown;
-    };
-    if (typeof tokenData.access_token !== "string") return null;
-
-    const nextExpiresIn = typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
-      ? tokenData.expires_in
-      : 3600;
-    const nextRefresh = typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : refreshToken;
-    const encodedAccessToken = Buffer.from(tokenData.access_token).toString("base64url");
-    const encodedRefreshToken = Buffer.from(nextRefresh).toString("base64url");
-    appendCookie(response, "deriv_access_token", encodedAccessToken, derivCookiePath, Math.max(1, Math.floor(nextExpiresIn)));
-    appendCookie(response, "deriv_refresh_token", encodedRefreshToken, derivCookiePath, 30 * 24 * 60 * 60);
-    saveDerivSession("default", {
-      accessToken: tokenData.access_token,
-      refreshToken: nextRefresh,
-      expiresIn: nextExpiresIn,
-    });
-    return tokenData.access_token;
-  } catch (error) {
-    console.error("Could not refresh Deriv token.", error);
+  }
+  if (!tokens) {
+    clearCookie(response, "deriv_access_token", derivCookiePath);
+    clearCookie(response, "deriv_refresh_token", derivCookiePath);
     return null;
   }
+
+  appendCookie(
+    response,
+    "deriv_access_token",
+    Buffer.from(tokens.accessToken).toString("base64url"),
+    derivCookiePath,
+    Math.max(1, Math.floor(tokens.expiresIn)),
+  );
+  appendCookie(
+    response,
+    "deriv_refresh_token",
+    Buffer.from(tokens.refreshToken).toString("base64url"),
+    derivCookiePath,
+    30 * 24 * 60 * 60,
+  );
+  return tokens.accessToken;
 }
 
 function coerceDerivBalance(value: unknown): number | null {
@@ -488,6 +503,7 @@ async function startServer() {
         derivCookiePath,
         expiresInSeconds,
       );
+      if (!refreshToken) clearCookie(response, "deriv_refresh_token", derivCookiePath);
       if (refreshToken) {
         appendCookie(
           response,
@@ -497,11 +513,6 @@ async function startServer() {
           30 * 24 * 60 * 60,
         );
       }
-      saveDerivSession("default", {
-        accessToken,
-        refreshToken,
-        expiresIn: expiresInSeconds,
-      });
       redirectToResult("connected");
     } catch (error) {
       console.error("Deriv OAuth token exchange could not be completed.", error);
@@ -513,16 +524,18 @@ async function startServer() {
   app.get("/api/deriv/session", async (request, response) => {
     response.set("Cache-Control", "no-store");
     let accessToken = readEncodedCookie(request, "deriv_access_token");
-    const storedSession = derivSessionStore.get("default");
-    if (!accessToken && storedSession && storedSession.expiresAt > Date.now()) {
-      accessToken = storedSession.accessToken;
-      const encodedToken = Buffer.from(accessToken).toString("base64url");
-      appendCookie(response, "deriv_access_token", encodedToken, derivCookiePath, Math.max(1, Math.floor((storedSession.expiresAt - Date.now()) / 1000)));
-    }
-
     if (!accessToken) {
-      const refreshedToken = await refreshDerivAccessToken(request, response);
-      accessToken = refreshedToken ?? null;
+      try {
+        accessToken = await refreshDerivAccessToken(request, response);
+      } catch (error) {
+        console.warn("Deriv token refresh is temporarily unavailable.", error);
+        response.status(503).json({
+          connected: Boolean(readEncodedCookie(request, "deriv_refresh_token")),
+          accounts: [],
+          warning: "Deriv is temporarily unavailable. The account connection has been preserved; retrying automatically.",
+        });
+        return;
+      }
     }
 
     if (!accessToken) {
@@ -539,23 +552,26 @@ async function startServer() {
 
       for (const endpoint of accountEndpoints) {
         try {
-          const accountResponse = await fetch(endpoint, {
+          const fetchAccounts = (token: string) => fetch(endpoint, {
             headers: {
-              Authorization: `Bearer ${accessToken}`,
+              Authorization: `Bearer ${token}`,
               Accept: "application/json",
             },
+            signal: AbortSignal.timeout(10_000),
           });
+          let accountResponse = await fetchAccounts(accessToken);
           if (accountResponse.status === 401) {
             const refreshedToken = await refreshDerivAccessToken(request, response);
             if (refreshedToken) {
               accessToken = refreshedToken;
-              continue;
+              accountResponse = await fetchAccounts(accessToken);
+              if (accountResponse.status === 401) continue;
+            } else {
+              clearCookie(response, "deriv_access_token", derivCookiePath);
+              clearCookie(response, "deriv_refresh_token", derivCookiePath);
+              response.json({ connected: false, expired: true });
+              return;
             }
-            clearCookie(response, "deriv_access_token", derivCookiePath);
-            clearCookie(response, "deriv_refresh_token", derivCookiePath);
-            derivSessionStore.delete("default");
-            response.json({ connected: false, expired: true });
-            return;
           }
           if (!accountResponse.ok) continue;
 
@@ -603,7 +619,15 @@ async function startServer() {
     }
 
     let accessToken = readEncodedCookie(request, "deriv_access_token");
-    if (!accessToken) accessToken = await refreshDerivAccessToken(request, response);
+    if (!accessToken) {
+      try {
+        accessToken = await refreshDerivAccessToken(request, response);
+      } catch (error) {
+        console.warn("Could not refresh Deriv credentials for the balance stream.", error);
+        response.status(503).json({ error: "Deriv is temporarily unavailable. Balance updates will retry." });
+        return;
+      }
+    }
     if (!accessToken) {
       response.status(401).json({ error: "Connect your Deriv account to receive balance updates." });
       return;
@@ -648,7 +672,6 @@ async function startServer() {
   app.post("/api/deriv/session/disconnect", (_request, response) => {
     clearCookie(response, "deriv_access_token", derivCookiePath);
     clearCookie(response, "deriv_refresh_token", derivCookiePath);
-    derivSessionStore.delete("default");
     response.set("Cache-Control", "no-store");
     response.json({ connected: false });
   });

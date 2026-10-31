@@ -143,6 +143,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   derivConnectedRef.current = derivConnected;
   const marketFeedStatusRef = useRef(marketFeedStatus);
   marketFeedStatusRef.current = marketFeedStatus;
+  const latestMarketSignalRef = useRef<MarketSignal | null>(null);
   const tradeToastTimerRef = useRef<number | null>(null);
   const tradeToastIdRef = useRef(0);
   const balanceRefreshRef = useRef(false);
@@ -160,6 +161,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
     try {
       const response = await fetch("/api/deriv/session", { cache: "no-store" });
       const result = (await response.json()) as DerivSessionResponse;
+      if (result.connected === true) setDerivConnected(true);
       if (!response.ok) throw new Error(result.error ?? "Could not check the Deriv connection.");
       setDerivConnected(result.connected === true);
       const accounts = result.accounts ?? [];
@@ -304,7 +306,6 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         setBalanceRefreshError(
           typeof message.error === "string" ? message.error : "Live balance updates are unavailable.",
         );
-        source.close();
         return;
       }
       const accountId = message.accountId;
@@ -413,13 +414,14 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   }, []);
 
   const handleMarketSignal = useCallback((signal: MarketSignal) => {
+    latestMarketSignalRef.current = signal;
     const runtime = botRuntimeRef.current;
     if (
       !signal.ready ||
       !runtime.running ||
       runtime.inFlight ||
       marketFeedStatusRef.current !== "Live" ||
-      !signal.crossover
+      !signal.tradeSignal
     ) return;
 
     const config = botConfigRef.current;
@@ -439,7 +441,7 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       return;
     }
 
-    const contractType = signal.crossover;
+    const contractType = signal.tradeSignal;
     const stake = runtime.nextStake ?? config.stakeAmount;
 
     runtime.inFlight = true;
@@ -704,6 +706,13 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
         ? "Watching market · real-account trades enabled"
         : "Watching market · demo account",
     );
+    const latestSignal = latestMarketSignalRef.current;
+    if (latestSignal?.ready && latestSignal.bias !== "neutral") {
+      handleMarketSignal({
+        ...latestSignal,
+        tradeSignal: latestSignal.bias === "bullish" ? "CALL" : "PUT",
+      });
+    }
   };
 
   const handleStopBot = () => {
