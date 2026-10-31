@@ -12,7 +12,6 @@ type ConsoleEntry = {
 
 type BreakoutState = {
   prices: number[];
-  ticks: number;
   previousPrice: number | null;
   lastTickIdentity: string | null;
 };
@@ -31,7 +30,6 @@ type MarketConsoleProps = {
 
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
-const SCAN_INTERVAL = 20;
 const BREAKOUT_LOOKBACK_TICKS = 30;
 
 export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: MarketConsoleProps) {
@@ -43,7 +41,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
   const recentEntryRef = useRef<{ key: string; timestamp: number } | null>(null);
   const breakoutRef = useRef<BreakoutState>({
     prices: [],
-    ticks: 0,
     previousPrice: null,
     lastTickIdentity: null,
   });
@@ -71,7 +68,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
         if (status === "Reconnecting" || status === "Unavailable") {
           breakoutRef.current = {
             prices: [],
-            ticks: 0,
             previousPrice: null,
             lastTickIdentity: null,
           };
@@ -104,7 +100,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
           : `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
-        state.ticks += 1;
         const ready = state.prices.length >= BREAKOUT_LOOKBACK_TICKS;
         const rangeHigh = ready ? Math.max(...state.prices) : null;
         const rangeLow = ready ? Math.min(...state.prices) : null;
@@ -118,10 +113,6 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
         state.prices.push(price);
         if (state.prices.length > BREAKOUT_LOOKBACK_TICKS) state.prices.shift();
         state.previousPrice = price;
-
-        if (ready && state.ticks % SCAN_INTERVAL === 0) {
-          appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
-        }
 
         onMarketSignal?.({
           price,
@@ -145,8 +136,18 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
   useEffect(() => {
     if (!isBotRunning) return;
     const logMarketStatus = () => {
-      const message = `${MARKET_SYMBOL} · bot running · scanning for breakouts`;
-      const key = `info:${message}`;
+      const { prices } = breakoutRef.current;
+      const level: ConsoleEntry["level"] = prices.length < BREAKOUT_LOOKBACK_TICKS
+        ? "neutral"
+        : prices[prices.length - 1] > prices[0]
+          ? "bullish"
+          : prices[prices.length - 1] < prices[0]
+            ? "bearish"
+            : "neutral";
+      const message = prices.length < BREAKOUT_LOOKBACK_TICKS
+        ? `Price action · ${MARKET_SYMBOL} · collecting range ${prices.length}/${BREAKOUT_LOOKBACK_TICKS} ticks`
+        : `Price action · ${MARKET_SYMBOL} · ${prices[prices.length - 1].toFixed(2)} · Support ${Math.min(...prices).toFixed(2)} · Resistance ${Math.max(...prices).toFixed(2)} · ${level === "bullish" ? "Bullish" : level === "bearish" ? "Bearish" : "Neutral"}`;
+      const key = `${level}:${message}`;
       const now = Date.now();
       if (recentEntryRef.current?.key === key && now - recentEntryRef.current.timestamp < 900) return;
       recentEntryRef.current = { key, timestamp: now };
@@ -154,7 +155,7 @@ export function MarketConsole({ isBotRunning, onMarketSignal, onFeedStatus }: Ma
         id: nextIdRef.current++,
         time: new Date(now).toLocaleTimeString(),
         message,
-        level: "info",
+        level,
       };
       setEntries((current) => [entry, ...current.slice(0, MAX_CONSOLE_ENTRIES - 1)]);
     };
