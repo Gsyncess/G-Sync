@@ -360,12 +360,32 @@ async function startServer() {
       }
 
       const accountData = (await accountResponse.json()) as {
-        data?: Array<{ account_type?: unknown; currency?: unknown }>;
+        data?: Array<{
+          account_id?: unknown;
+          account_type?: unknown;
+          balance?: unknown;
+          currency?: unknown;
+          status?: unknown;
+        }>;
       };
-      const accounts = (accountData.data ?? []).map((account) => ({
-        accountType: typeof account.account_type === "string" ? account.account_type : "unknown",
-        currency: typeof account.currency === "string" ? account.currency : "",
-      }));
+      const accounts = (accountData.data ?? []).flatMap((account) => {
+        if (
+          typeof account.account_id !== "string" ||
+          (account.account_type !== "demo" && account.account_type !== "real") ||
+          typeof account.balance !== "number" ||
+          !Number.isFinite(account.balance) ||
+          typeof account.currency !== "string" ||
+          account.status === "inactive"
+        ) {
+          return [];
+        }
+        return [{
+          accountId: account.account_id,
+          accountType: account.account_type,
+          balance: account.balance,
+          currency: account.currency,
+        }];
+      });
       response.json({ connected: true, accounts });
     } catch (error) {
       console.error("Could not verify the Deriv account connection.", error);

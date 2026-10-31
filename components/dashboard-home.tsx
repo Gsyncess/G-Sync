@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Bot,
+  ChevronDown,
   CircleHelp,
   Clock3,
   Home,
@@ -14,7 +15,9 @@ import {
 import { DerivSmartChart } from "@/components/deriv-smartchart";
 
 type DerivAccount = {
+  accountId: string;
   accountType: string;
+  balance: number;
   currency: string;
 };
 
@@ -37,21 +40,34 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const [derivConnected, setDerivConnected] = useState(false);
   const [derivBusy, setDerivBusy] = useState(true);
   const [derivMessage, setDerivMessage] = useState("");
+  const [selectedDerivAccountId, setSelectedDerivAccountId] = useState("");
+  const [derivMenuOpen, setDerivMenuOpen] = useState(false);
+  const derivMenuRef = useRef<HTMLDivElement>(null);
 
-  const loadDerivSession = useCallback(async () => {
-    setDerivBusy(true);
+  const loadDerivSession = useCallback(async (showLoading = true) => {
+    if (showLoading) setDerivBusy(true);
     try {
       const response = await fetch("/api/deriv/session", { cache: "no-store" });
       const result = (await response.json()) as DerivSessionResponse;
       if (!response.ok) throw new Error(result.error ?? "Could not check the Deriv connection.");
       setDerivConnected(result.connected === true);
-      setDerivAccounts(result.accounts ?? []);
+      const accounts = result.accounts ?? [];
+      setDerivAccounts(accounts);
+      const saved = window.sessionStorage.getItem("deriv-account-id");
+      const nextId = accounts.some((account) => account.accountId === saved)
+        ? saved!
+        : accounts.find((account) => account.accountType === "demo")?.accountId
+          ?? accounts[0]?.accountId
+          ?? "";
+      setSelectedDerivAccountId(nextId);
+      if (nextId) window.sessionStorage.setItem("deriv-account-id", nextId);
+      else window.sessionStorage.removeItem("deriv-account-id");
       if (result.warning) setDerivMessage(result.warning);
       if (result.expired) setDerivMessage("Your Deriv authorization expired. Please connect again.");
     } catch (error) {
       setDerivMessage(error instanceof Error ? error.message : "Could not check the Deriv connection.");
     } finally {
-      setDerivBusy(false);
+      if (showLoading) setDerivBusy(false);
     }
   }, []);
 
@@ -82,7 +98,36 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     }
     void loadDerivSession();
+    const refreshTimer = window.setInterval(() => {
+      void loadDerivSession(false);
+    }, 60_000);
+    const refreshOnFocus = () => {
+      void loadDerivSession(false);
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
   }, [loadDerivSession]);
+
+  useEffect(() => {
+    if (!derivMenuOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (event.target instanceof Node && !derivMenuRef.current?.contains(event.target)) {
+        setDerivMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDerivMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [derivMenuOpen]);
 
   const disconnectDeriv = async () => {
     setDerivBusy(true);
@@ -92,6 +137,9 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
       if (!response.ok) throw new Error("Could not disconnect the Deriv account.");
       setDerivConnected(false);
       setDerivAccounts([]);
+      setSelectedDerivAccountId("");
+      setDerivMenuOpen(false);
+      window.sessionStorage.removeItem("deriv-account-id");
       setDerivMessage("Your Deriv account has been disconnected.");
     } catch (error) {
       setDerivMessage(error instanceof Error ? error.message : "Could not disconnect the Deriv account.");
@@ -103,6 +151,31 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
   const accountSummary = derivAccounts
     .map(({ accountType, currency }) => [accountType, currency].filter(Boolean).join(" · "))
     .join(", ");
+  const selectedDerivAccount = derivAccounts.find(
+    (account) => account.accountId === selectedDerivAccountId,
+  );
+  const formatBalance = (account: DerivAccount, compact = false) => {
+    const currency = /^[A-Z]{3}$/.test(account.currency) ? account.currency : "USD";
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        notation: compact ? "compact" : "standard",
+        minimumFractionDigits: compact ? 0 : 2,
+        maximumFractionDigits: compact ? 1 : 2,
+      }).format(account.balance);
+    } catch {
+      return `$${account.balance.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+  };
+  const selectDerivAccount = (account: DerivAccount) => {
+    setSelectedDerivAccountId(account.accountId);
+    window.sessionStorage.setItem("deriv-account-id", account.accountId);
+    setDerivMenuOpen(false);
+  };
 
   return (
     <main className="dashboard-shell">
@@ -116,16 +189,61 @@ export function DashboardHome({ email, socketOnline, onSignOut }: DashboardHomeP
             <span className={socketOnline ? "status-dot status-dot-live" : "status-dot"} />
             {socketOnline ? "Synced" : "Offline"}
           </span>
-          {derivConnected ? (
+          {derivConnected && selectedDerivAccount ? (
+            <div className="deriv-account-switcher" ref={derivMenuRef}>
+              <button
+                type="button"
+                className="deriv-header-button deriv-balance-button"
+                onClick={() => setDerivMenuOpen((open) => !open)}
+                disabled={derivBusy}
+                title={`${formatBalance(selectedDerivAccount)} · ${selectedDerivAccount.accountType} account`}
+                aria-label={`Deriv ${selectedDerivAccount.accountType} balance ${formatBalance(selectedDerivAccount)}. Switch account`}
+                aria-expanded={derivMenuOpen}
+                aria-haspopup="menu"
+                aria-controls="deriv-account-menu"
+              >
+                <span>{formatBalance(selectedDerivAccount, true)}</span>
+                <ChevronDown size={14} aria-hidden="true" />
+              </button>
+              {derivMenuOpen && (
+                <div className="deriv-account-menu" id="deriv-account-menu" role="menu" aria-label="Switch Deriv account">
+                  {derivAccounts.map((account) => (
+                    <button
+                      type="button"
+                      key={account.accountId}
+                      className="deriv-account-option"
+                      role="menuitemradio"
+                      aria-checked={account.accountId === selectedDerivAccount.accountId}
+                      onClick={() => selectDerivAccount(account)}
+                    >
+                      <span>
+                        <strong>{account.accountType === "demo" ? "Demo" : "Real"}</strong>
+                        <small>{account.currency}</small>
+                      </span>
+                      <span>{formatBalance(account)}</span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="deriv-account-disconnect"
+                    role="menuitem"
+                    onClick={() => void disconnectDeriv()}
+                  >
+                    Disconnect Deriv
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : derivConnected ? (
             <button
               type="button"
               className="deriv-header-button"
               onClick={() => void disconnectDeriv()}
               disabled={derivBusy}
-              title={accountSummary ? `Disconnect Deriv (${accountSummary})` : "Disconnect Deriv account"}
-              aria-label="Disconnect Deriv account"
+              title={accountSummary || "No eligible Deriv accounts found"}
+              aria-label="Deriv connected, disconnect account"
             >
-              {derivBusy ? "…" : "Connected"}
+              Connected
             </button>
           ) : (
             <a

@@ -80,6 +80,22 @@ input {
   }
 }
 
+@media (max-width: 380px) {
+  .dashboard-header-actions {
+    gap: 6px;
+  }
+
+  .dashboard-live-indicator {
+    gap: 0;
+    font-size: 0;
+  }
+
+  .deriv-balance-button {
+    max-width: 94px;
+    font-size: 9px;
+  }
+}
+
 .dashboard-shell {
   display: flex;
   width: 100%;
@@ -139,7 +155,7 @@ input {
 }
 
 .dashboard-header-actions {
-  gap: 12px;
+  gap: 8px;
 }
 
 .dashboard-live-indicator {
@@ -193,6 +209,85 @@ input {
   font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
+}
+
+.deriv-account-switcher {
+  position: relative;
+}
+
+.deriv-balance-button {
+  max-width: 116px;
+  gap: 4px;
+  padding: 0 7px;
+}
+
+.deriv-balance-button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deriv-balance-button svg {
+  flex: none;
+}
+
+.deriv-account-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(250px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid #e3e9ef;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(26 43 70 / 16%);
+}
+
+.deriv-account-option {
+  display: flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid #edf0f3;
+  padding: 8px 11px;
+  background: #fff;
+  color: #263447;
+  font-size: 11px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.deriv-account-option:hover,
+.deriv-account-option[aria-checked="true"] {
+  background: #f0f8f6;
+}
+
+.deriv-account-option > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.deriv-account-option small {
+  color: #8994a3;
+  font-size: 9px;
+}
+
+.deriv-account-disconnect {
+  width: 100%;
+  border: 0;
+  padding: 10px 11px;
+  background: #fff;
+  color: #b8524f;
+  font-size: 10px;
+  text-align: left;
+}
+
+.deriv-account-disconnect:hover {
+  background: #fff7f6;
 }
 
 .deriv-header-button[aria-disabled="true"],
