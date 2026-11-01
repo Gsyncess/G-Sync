@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Activity } from "lucide-react";
 import { DerivMarketTransport, type DerivMarketQuote } from "@/lib/deriv-market-transport";
 
 type ConsoleEntry = {
@@ -26,6 +27,8 @@ export type MarketSignal = {
 };
 
 type MarketConsoleProps = {
+  showAnalysis: boolean;
+  idleMessage: string;
   onMarketSignal?: (signal: MarketSignal) => void;
   onFeedStatus?: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void;
 };
@@ -38,10 +41,12 @@ const DPO_SHIFT = Math.floor(DPO_PERIOD / 2) + 1;
 const DPO_WARMUP_TICKS = DPO_PERIOD + DPO_SHIFT;
 const MARKET_WINDOW_TICKS = 20;
 
-export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
+export function MarketConsole({ showAnalysis, idleMessage, onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const entriesRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(0);
+  const showAnalysisRef = useRef(showAnalysis);
+  showAnalysisRef.current = showAnalysis;
   const indicatorRef = useRef<IndicatorState>({
     prices: [],
     ticks: 0,
@@ -52,7 +57,7 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
   useEffect(() => {
     let active = true;
     const appendEntry = (message: string, level: ConsoleEntry["level"] = "info", time = new Date()) => {
-      if (!active) return;
+      if (!active || !showAnalysisRef.current) return;
       const entry: ConsoleEntry = {
         id: nextIdRef.current++,
         time: time.toLocaleTimeString(),
@@ -170,21 +175,32 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
   }, [onFeedStatus, onMarketSignal]);
 
   useEffect(() => {
+    if (!showAnalysis) setEntries([]);
+  }, [showAnalysis]);
+
+  useEffect(() => {
     entriesRef.current?.scrollTo({ top: 0 });
   }, [entries]);
 
   return (
     <section className="market-console-panel" aria-label="Live market and analysis console">
-      <div className="market-console-output" ref={entriesRef} role="log" aria-label="Market feed and analysis log" aria-live="off">
-        {entries.length === 0 ? (
-          <p className="market-console-empty">Waiting for market updates…</p>
-        ) : entries.map((entry) => (
-          <div className={`market-console-entry market-console-${entry.level}`} key={entry.id}>
-            <time>{entry.time}</time>
-            <span>{entry.message}</span>
-          </div>
-        ))}
-      </div>
+      {showAnalysis ? (
+        <div className="market-console-output" ref={entriesRef} role="log" aria-label="Market feed and analysis log" aria-live="off">
+          {entries.length === 0 ? (
+            <p className="market-console-empty">Waiting for live market analysis…</p>
+          ) : entries.map((entry) => (
+            <div className={`market-console-entry market-console-${entry.level}`} key={entry.id}>
+              <time>{entry.time}</time>
+              <span>{entry.message}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="market-console-idle" role="status">
+          <span className="market-console-idle-icon"><Activity size={20} aria-hidden="true" /></span>
+          <p>{idleMessage}</p>
+        </div>
+      )}
     </section>
   );
 }

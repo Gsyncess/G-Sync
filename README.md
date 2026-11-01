@@ -41,7 +41,7 @@ Supabase URL and anon key are required for authentication. The payment and subsc
 
 Database changes are versioned in [supabase/migrations/](supabase/migrations). When a migration is pushed to `main`, the GitHub Actions workflow applies pending migrations to the linked Supabase project automatically. You can also start the workflow from GitHub Actions with **Run workflow**. Do not edit the live database manually or re-run old SQL; add a new timestamped migration for each schema change. The initial migration is safe to apply to an existing installation of the previous schema.
 
-The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Each profile receives a unique `G-` account ID, for example `G-6839387474588`, generated and stored by Supabase for new and existing users. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
+The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Signup collects the user's first name and saves it to Supabase Auth metadata and their profile for display. Each profile receives a unique `G-` account ID, for example `G-6839387474588`, generated and stored by Supabase for new and existing users. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
 
 ## Bot subscriptions and in-app payments
 

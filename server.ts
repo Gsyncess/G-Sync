@@ -370,16 +370,18 @@ async function startServer() {
     }
 
     const metadata = user.user_metadata ?? {};
-    const username = [
-      metadata.username,
-      metadata.name,
-      user.email?.split("@")[0],
-    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "User";
-    const displayName = [
+    const firstName = [
+      metadata.first_name,
+      metadata.given_name,
       metadata.full_name,
       metadata.name,
-      username,
-    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? username;
+      metadata.username,
+      user.email?.split("@")[0],
+    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ?.trim()
+      .split(/\s+/)[0] ?? "User";
+    const username = firstName;
+    const displayName = firstName;
 
     if (supabaseAdmin) {
       const { error: profileError } = await supabaseAdmin

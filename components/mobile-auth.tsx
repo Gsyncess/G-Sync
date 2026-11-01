@@ -13,6 +13,7 @@ import {
   Mail,
   ShieldCheck,
   Sparkles,
+  UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,8 +23,20 @@ import { RobotLogo } from "@/components/robot-logo";
 
 type Screen = "splash" | "login" | "signup" | "reset";
 
+function getAccountFirstName(metadata: Record<string, unknown>, email: string) {
+  const name = [
+    metadata.first_name,
+    metadata.given_name,
+    metadata.full_name,
+    metadata.name,
+    metadata.username,
+  ].find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return name?.trim().split(/\s+/)[0] || email.split("@")[0] || "User";
+}
+
 export function MobileAuth() {
   const [screen, setScreen] = useState<Screen>("splash");
+  const [firstName, setFirstName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -92,6 +105,7 @@ export function MobileAuth() {
           setAccountEmail("");
           setAccountId("");
           setAccountName("");
+          setFirstName("");
           socket.disconnect();
           return;
         }
@@ -100,16 +114,9 @@ export function MobileAuth() {
         authenticatedRef.current = true;
         setAuthenticated(true);
         const userEmail = session.user.email ?? "";
-        const metadataName = session.user.user_metadata.username
-          ?? session.user.user_metadata.full_name
-          ?? session.user.user_metadata.name;
         setAccountEmail(userEmail);
         setAccountId(session.user.id);
-        setAccountName(
-          typeof metadataName === "string" && metadataName.trim()
-            ? metadataName.trim()
-            : userEmail.split("@")[0] || "User",
-        );
+        setAccountName(getAccountFirstName(session.user.user_metadata, userEmail));
         if (socket.connected) socket.disconnect();
         socket.connect();
       });
@@ -121,16 +128,9 @@ export function MobileAuth() {
         authenticatedRef.current = true;
         setAuthenticated(true);
         const userEmail = sessionData.session.user.email ?? "";
-        const metadataName = sessionData.session.user.user_metadata.username
-          ?? sessionData.session.user.user_metadata.full_name
-          ?? sessionData.session.user.user_metadata.name;
         setAccountEmail(userEmail);
         setAccountId(sessionData.session.user.id);
-        setAccountName(
-          typeof metadataName === "string" && metadataName.trim()
-            ? metadataName.trim()
-            : userEmail.split("@")[0] || "User",
-        );
+        setAccountName(getAccountFirstName(sessionData.session.user.user_metadata, userEmail));
         socket.connect();
       });
     }
@@ -165,11 +165,27 @@ export function MobileAuth() {
     setBusy(true);
     try {
       if (screen === "signup") {
+        const normalizedFirstName = firstName.trim();
+        if (!normalizedFirstName) {
+          setMessage("Enter your first name to create your profile.");
+          return;
+        }
         if (password !== confirmPassword) {
           setMessage("Those passwords do not match yet.");
           return;
         }
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              first_name: normalizedFirstName,
+              name: normalizedFirstName,
+              username: normalizedFirstName,
+              full_name: normalizedFirstName,
+            },
+          },
+        });
         if (error) throw error;
         setMessage("Check your inbox for a link to verify your email.");
       } else if (screen === "reset") {
@@ -301,6 +317,22 @@ export function MobileAuth() {
               </div>
 
               <form className="flex flex-col gap-3" onSubmit={handleSubmit}>
+                {screen === "signup" && (
+                  <label className="relative block">
+                    <UserRound className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
+                    <Input
+                      aria-label="First name"
+                      autoComplete="given-name"
+                      type="text"
+                      placeholder="First name"
+                      maxLength={80}
+                      required
+                      value={firstName}
+                      onChange={(event) => setFirstName(event.target.value)}
+                      className="pl-11"
+                    />
+                  </label>
+                )}
                 <label className="relative block">
                   <Mail className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
                   <Input

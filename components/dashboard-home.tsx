@@ -1018,6 +1018,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const winRate = hasReliableWinRate
     ? Math.round((performance.wins / decidedTrades) * 100)
     : 0;
+  const marketConsoleIdleMessage = !derivConnected
+    ? "Connect your Deriv account to see live market analysis."
+    : "Start the bot to see live market analysis.";
   const selectDerivAccount = (account: DerivAccount) => {
     if (botRuntimeRef.current.running || botRuntimeRef.current.inFlight) return;
     botRuntimeRef.current = {
@@ -1160,7 +1163,12 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
               </span>
             </div>
 
-            <MarketConsole onMarketSignal={handleMarketSignal} onFeedStatus={handleFeedStatus} />
+            <MarketConsole
+              showAnalysis={derivConnected && botRunning}
+              idleMessage={marketConsoleIdleMessage}
+              onMarketSignal={handleMarketSignal}
+              onFeedStatus={handleFeedStatus}
+            />
 
             <section
               className="performance-panel"
@@ -1289,9 +1297,17 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             {!historyReady || historyAccountId !== selectedDerivAccountId ? (
               <p className="history-empty">Loading trade history…</p>
             ) : !derivConnected || !selectedDerivAccountId ? (
-              <p className="history-empty">Connect a Deriv account to view its trade history.</p>
+              <div className="history-empty">
+                <span className="history-empty-icon"><Clock3 size={24} aria-hidden="true" /></span>
+                <strong>Connect your Deriv account</strong>
+                <span>Trade history will appear here after you connect.</span>
+              </div>
             ) : accountTrades.length === 0 ? (
-              <p className="history-empty">No completed bot trades for this account yet.</p>
+              <div className="history-empty">
+                <span className="history-empty-icon"><Clock3 size={24} aria-hidden="true" /></span>
+                <strong>No trades yet</strong>
+                <span>Your completed bot trades will appear here.</span>
+              </div>
             ) : (
               <div className="history-table-viewport">
                 <table className="history-table">
