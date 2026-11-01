@@ -368,6 +368,12 @@ input {
   overflow: hidden;
 }
 
+.dashboard-content-payment {
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+
 .dashboard-content-scroll {
   overflow-x: hidden;
   overflow-y: auto;
@@ -1071,7 +1077,8 @@ input {
 }
 
 .dashboard-content-scroll .dashboard-config-view,
-.dashboard-content-scroll .dashboard-settings-view {
+.dashboard-content-scroll .dashboard-settings-view,
+.dashboard-content-payment .dashboard-settings-view {
   flex: 0 0 auto;
   min-height: 100%;
   overflow: visible;
@@ -2093,6 +2100,17 @@ input {
 
 .payment-return-note {
   font-size: 12px !important;
+}
+
+.payment-expiry-countdown {
+  border: 1px solid #f1dfb8;
+  border-radius: 999px;
+  background: #fffaf0;
+  padding: 7px 12px;
+  color: #80611f;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
 
 .payment-return-qr {

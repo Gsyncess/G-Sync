@@ -1074,7 +1074,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           </button>
         </div>
       )}
-      <header className="dashboard-header">
+      {!paymentScreen && <header className="dashboard-header">
         <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
           <span className="dashboard-brand-icon"><RobotLogo className="size-7" /></span>
           <span>G-Sync<span className="dashboard-brand-dot">.</span></span>
@@ -1160,9 +1160,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             <LogOut size={18} />
           </button>
         </div>
-      </header>
+      </header>}
       <section
-        className={`dashboard-content ${activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
+        className={`dashboard-content ${paymentScreen ? "dashboard-content-payment" : activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
         aria-label="Dashboard pages"
       >
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
@@ -1413,7 +1413,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         </div>
       </section>
 
-      <nav className="dashboard-bottom-nav" aria-label="Main navigation">
+      {!paymentScreen && <nav className="dashboard-bottom-nav" aria-label="Main navigation">
         <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined} aria-controls="dashboard-home-view">
           <Home size={19} /><span>Home</span>
         </button>
@@ -1426,7 +1426,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         <button type="button" className={`bottom-nav-item ${activeView === "settings" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("settings")} aria-current={activeView === "settings" ? "page" : undefined} aria-controls="dashboard-settings-view">
           <Settings2 size={19} /><span>Settings</span>
         </button>
-      </nav>
+      </nav>}
     </main>
   );
 }

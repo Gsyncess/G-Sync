@@ -24,6 +24,7 @@ const subscriptionsEnabled = process.env.SUBSCRIPTIONS_ENABLED?.trim().toLowerCa
 const plisioApiKey = process.env.PLISIO_API_KEY?.trim();
 const SUBSCRIPTION_PRICE_USD = 5;
 const SUBSCRIPTION_DURATION_HOURS = 12;
+const PLISIO_INVOICE_EXPIRY_MINUTES = 30;
 const nextApp = next({ dev: development });
 const nextHandler = nextApp.getRequestHandler();
 const supabaseAuth =
@@ -46,6 +47,32 @@ const supabaseAdmin =
         },
       })
     : null;
+
+function parsePlisioTimestamp(value: unknown): Date | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const numericValue = Number(value);
+  const timestamp = Number.isFinite(numericValue)
+    ? numericValue > 1_000_000_000_000
+      ? numericValue
+      : numericValue * 1000
+    : Date.parse(String(value));
+  if (!Number.isFinite(timestamp)) return null;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function deleteExpiredPlisioPayments(userId?: string) {
+  if (!supabaseAdmin) return { error: null };
+  let query = supabaseAdmin
+    .from("plisio_payments")
+    .delete()
+    .is("activated_at", null)
+    .in("payment_status", ["new", "pending"])
+    .lte("expires_at", new Date().toISOString());
+  if (userId) query = query.eq("user_id", userId);
+  const { error } = await query;
+  return { error };
+}
 
 const securityHeaders = {
   crossOriginEmbedderPolicy: false,
@@ -642,6 +669,7 @@ async function startServer() {
       callback_url: callbackUrl,
       success_invoice_url: successUrl,
       fail_invoice_url: failedUrl,
+      expire_min: String(PLISIO_INVOICE_EXPIRY_MINUTES),
       ...(customerEmail ? { email: customerEmail } : {}),
     });
 
@@ -692,6 +720,10 @@ async function startServer() {
     }
 
     const createdAt = new Date().toISOString();
+    const expiresAt = (
+      parsePlisioTimestamp(invoice.expire_utc) ??
+      new Date(Date.parse(createdAt) + PLISIO_INVOICE_EXPIRY_MINUTES * 60_000)
+    ).toISOString();
     const { error: insertError } = await supabaseAdmin
       .from("plisio_payments")
       .insert({
@@ -707,6 +739,7 @@ async function startServer() {
         qr_code: typeof qrCode === "string" && /^data:image\/(?:png|jpeg);base64,/.test(qrCode) ? qrCode : null,
         payment_status: typeof invoice.status === "string" ? invoice.status : "new",
         created_at: createdAt,
+        expires_at: expiresAt,
         updated_at: createdAt,
       });
     if (insertError) {
@@ -725,6 +758,7 @@ async function startServer() {
       payAddress: paymentAddress,
       qrCode: typeof qrCode === "string" && /^data:image\/(?:png|jpeg);base64,/.test(qrCode) ? qrCode : null,
       status: typeof invoice.status === "string" ? invoice.status : "new",
+      expiresAt,
     });
   });
 
@@ -737,6 +771,13 @@ async function startServer() {
     const user = await authenticateSupabaseRequest(request);
     if (!user) {
       response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in to view payment history." });
+      return;
+    }
+
+    const { error: cleanupError } = await deleteExpiredPlisioPayments(user.id);
+    if (cleanupError) {
+      console.error("Could not remove expired subscription payments.", cleanupError);
+      response.status(503).json({ error: "Could not load payment history." });
       return;
     }
 
@@ -785,7 +826,7 @@ async function startServer() {
     const [{ data: payment, error: paymentError }, subscription] = await Promise.all([
       supabaseAdmin
         .from("plisio_payments")
-        .select("payment_id, order_id, payment_address, qr_code, payment_amount, payment_currency, payment_status")
+        .select("payment_id, order_id, payment_address, qr_code, payment_amount, payment_currency, payment_status, expires_at, activated_at")
         .eq("order_id", orderId)
         .eq("user_id", user.id)
         .maybeSingle(),
@@ -799,6 +840,43 @@ async function startServer() {
       response.status(404).json({ error: "Payment not found." });
       return;
     }
+    let paymentStatus = payment.payment_status;
+    if (
+      !payment.activated_at &&
+      ["new", "pending"].includes(paymentStatus) &&
+      payment.expires_at &&
+      Date.parse(payment.expires_at) <= Date.now()
+    ) {
+      const { data: deletedPayments, error: deleteError } = await supabaseAdmin
+        .from("plisio_payments")
+        .delete()
+        .eq("payment_id", payment.payment_id)
+        .eq("user_id", user.id)
+        .is("activated_at", null)
+        .in("payment_status", ["new", "pending"])
+        .lte("expires_at", new Date().toISOString())
+        .select("payment_id");
+      if (deleteError) {
+        console.error("Could not remove an expired subscription payment.", deleteError);
+        response.status(503).json({ error: "Could not check the payment status." });
+        return;
+      }
+      if (deletedPayments?.length) {
+        paymentStatus = "expired";
+      } else {
+        const { data: latestPayment, error: latestPaymentError } = await supabaseAdmin
+          .from("plisio_payments")
+          .select("payment_status")
+          .eq("order_id", orderId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (latestPaymentError) {
+          response.status(503).json({ error: "Could not check the payment status." });
+          return;
+        }
+        paymentStatus = latestPayment?.payment_status ?? "expired";
+      }
+    }
     response.json({
       paymentId: payment.payment_id,
       orderId: payment.order_id,
@@ -806,7 +884,8 @@ async function startServer() {
       qrCode: payment.qr_code,
       payAmount: Number(payment.payment_amount),
       payCurrency: payment.payment_currency,
-      status: payment.payment_status,
+      status: paymentStatus,
+      expiresAt: payment.expires_at,
       subscriptionExpiresAt: subscription.expiresAt,
     });
   });
@@ -1409,6 +1488,19 @@ async function startServer() {
   server.listen(port, "0.0.0.0", () => {
     console.log(`G-Sync is ready on http://localhost:${port}`);
   });
+
+  if (subscriptionsEnabled && supabaseAdmin) {
+    const cleanupExpiredPayments = async () => {
+      try {
+        const { error } = await deleteExpiredPlisioPayments();
+        if (error) console.error("Could not remove expired subscription payments.", error);
+      } catch (error) {
+        console.error("Could not remove expired subscription payments.", error);
+      }
+    };
+    void cleanupExpiredPayments();
+    setInterval(() => void cleanupExpiredPayments(), 10_000);
+  }
 }
 
 startServer();
