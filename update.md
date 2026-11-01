@@ -1,3 +1,19 @@
+Update my existing G-Sync application to use Supabase as the central database and session management system without rebuilding the frontend or changing the existing UI design.
+
+Requirements:
+
+1. Store user accounts, subscription status, bot sessions, trading status, and trade history in Supabase.
+2. Ensure START and STOP commands update the database and synchronize the actual bot status.
+3. Keep bot sessions recoverable after browser closure, phone lock, server restarts, and reconnections.
+4. Use secure server-side operations for Deriv API authorization and trading. Never expose API tokens or secrets in the frontend.
+5. Prevent duplicate trades and simultaneous bot sessions for the same user.
+6. Ensure only authorized users with active subscriptions can start trading.
+7. Use Supabase Edge Functions only for suitable short-running tasks, not continuous trading loops.
+8. Preserve my existing frontend, UI colors, layout, and trading console. Do not change my trading strategy.
+9. Inspect the existing codebase first and reuse the current Supabase configuration. Implement only the necessary changes and clearly identify any additional server-side service required for continuous trading.
+
+
+
 Update the existing G-Sync automated trading bot. Preserve the current app UI, background colors, console card colors, layout, and all working features.
 
 1. Automated Trading Strategy
