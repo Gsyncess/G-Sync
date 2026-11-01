@@ -5,7 +5,7 @@
 :root {
   color-scheme: light;
   --lavender: #edf4ff;
-  --cobalt: #2539a5;
+  --cobalt: #147a52;
   --ink: #17213a;
   --phone-bg: #ffffff;
   --app-surface: #ffffff;
@@ -39,7 +39,7 @@ input {
 }
 
 ::selection {
-  background: #dce2ff;
+  background: #dcefe4;
   color: var(--cobalt);
 }
 
@@ -192,7 +192,7 @@ input {
   flex: none;
   place-items: center;
   color: #fff;
-  background: #2539a5;
+  background: #147a52;
 }
 
 .dashboard-brand-icon {
@@ -243,8 +243,8 @@ input {
   place-items: center;
   border: 0;
   border-radius: 50%;
-  background: #f3f6fa;
-  color: #526174;
+  background: #eff8f3;
+  color: #147a52;
 }
 
 .deriv-header-button {
@@ -349,7 +349,7 @@ input {
 }
 
 .dashboard-icon-button:active {
-  background: #e7edf4;
+  background: #dcefe4;
 }
 
 .dashboard-content {
@@ -430,7 +430,7 @@ input {
 }
 
 .checkout-back-button:hover {
-  background: #eaf1ed;
+  background: #eff8f3;
 }
 
 .checkout-content {
@@ -1737,8 +1737,8 @@ input {
 }
 
 .signal-config-input:focus {
-  border-color: #6879ce;
-  outline: 3px solid rgb(37 57 165 / 10%);
+  border-color: #16845a;
+  outline: 3px solid rgb(22 132 90 / 10%);
   background: #fff;
 }
 
@@ -1822,7 +1822,7 @@ input {
 }
 
 .bottom-nav-active {
-  color: #2539a5;
+  color: #147a52;
 }
 
 .bottom-nav-item:disabled {
@@ -1836,7 +1836,7 @@ input {
     min-height: min(640px, calc(100dvh - 56px));
     border: 7px solid rgba(255, 255, 255, 0.92);
     border-radius: 24px;
-    box-shadow: 0 24px 70px rgba(37, 57, 165, 0.18);
+    box-shadow: 0 24px 70px rgb(20 122 82 / 18%);
   }
 
   .dashboard-content {
