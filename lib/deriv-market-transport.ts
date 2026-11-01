@@ -28,6 +28,7 @@ type PendingRequest = {
   resolve: (response: DerivResponse) => void;
   reject: (error: Error) => void;
   timeout: number;
+  subscriptionKey?: string;
 };
 
 const subscriptionKey = (request: { symbol?: string; ticks_history?: string }) =>
@@ -45,6 +46,7 @@ export class DerivMarketTransport {
   private subscriptions = new Map<string, Subscription>();
   private opening: Promise<void> | null = null;
   private connectionGeneration = 0;
+  private isLive = false;
 
   constructor(
     private readonly onStatus: (status: "Connecting" | "Live" | "Reconnecting" | "Unavailable") => void,
@@ -55,6 +57,7 @@ export class DerivMarketTransport {
 
   private connect() {
     if (this.closed) return;
+    this.isLive = false;
     this.onStatus(this.socket ? "Reconnecting" : "Connecting");
     const generation = ++this.connectionGeneration;
     this.opening = new Promise((resolve) => {
@@ -81,6 +84,7 @@ export class DerivMarketTransport {
         resolve();
         if (this.socket !== socket) return;
         this.socket = null;
+        this.isLive = false;
         this.subscriptions.forEach((subscription) => {
           subscription.id = undefined;
           subscription.openingGeneration = undefined;
@@ -111,8 +115,8 @@ export class DerivMarketTransport {
     }
 
     const requestId = response.req_id;
+    const pendingRequest = requestId === undefined ? undefined : this.pending.get(requestId);
     if (requestId !== undefined) {
-      const pendingRequest = this.pending.get(requestId);
       if (pendingRequest) {
         window.clearTimeout(pendingRequest.timeout);
         this.pending.delete(requestId);
@@ -121,15 +125,30 @@ export class DerivMarketTransport {
     }
 
     const requestEcho = response.echo_req ?? {};
-    const key = subscriptionKey({
-      symbol: typeof requestEcho.ticks_history === "string" ? requestEcho.ticks_history : undefined,
-      ticks_history: typeof requestEcho.ticks_history === "string" ? requestEcho.ticks_history : undefined,
-    });
+    const subscriptionId = response.subscription?.id;
+    const matchingSubscription = subscriptionId
+      ? [...this.subscriptions.entries()].find(([, candidate]) => candidate.id === subscriptionId)
+      : undefined;
+    const echoedSymbol = [
+      requestEcho.ticks,
+      requestEcho.ticks_history,
+      requestEcho.symbol,
+    ].find((value): value is string => typeof value === "string");
+    const key = matchingSubscription?.[0]
+      ?? (echoedSymbol ? subscriptionKey({ symbol: echoedSymbol }) : undefined)
+      ?? pendingRequest?.subscriptionKey;
+    if (!key) return;
     const subscription = this.subscriptions.get(key);
     if (!subscription) return;
-    if (response.subscription?.id) subscription.id = response.subscription.id;
+    if (subscriptionId) subscription.id = subscriptionId;
 
-    if (response.tick) {
+    if (
+      response.tick &&
+      typeof response.tick.quote === "number" &&
+      Number.isFinite(response.tick.quote) &&
+      typeof response.tick.epoch === "number" &&
+      Number.isFinite(response.tick.epoch)
+    ) {
       const date = new Date(response.tick.epoch * 1000);
       const quote: DerivMarketQuote = {
         Date: date.toISOString(),
@@ -138,10 +157,18 @@ export class DerivMarketTransport {
         tick: response.tick,
       };
       subscription.callbacks.forEach((callback) => callback(quote));
+      if (!this.isLive) {
+        this.isLive = true;
+        this.onStatus("Live");
+      }
     }
   }
 
-  private async send(request: Record<string, unknown>, generation: number): Promise<DerivResponse> {
+  private async send(
+    request: Record<string, unknown>,
+    generation: number,
+    requestSubscriptionKey?: string,
+  ): Promise<DerivResponse> {
     if (this.connectionGeneration !== generation) {
       throw new Error("Deriv connection changed before the request was sent.");
     }
@@ -163,7 +190,7 @@ export class DerivMarketTransport {
         this.pending.delete(reqId);
         reject(new Error("Deriv request timed out."));
       }, 15000);
-      this.pending.set(reqId, { resolve, reject, timeout });
+      this.pending.set(reqId, { resolve, reject, timeout, subscriptionKey: requestSubscriptionKey });
       try {
         socket.send(JSON.stringify({ ...request, req_id: reqId }));
       } catch (error) {
@@ -184,19 +211,14 @@ export class DerivMarketTransport {
     const request = subscription.request;
     try {
       const response = await this.send({
-        ticks_history: request.symbol,
-        style: "ticks",
+        ticks: request.symbol,
         subscribe: 1,
-        adjust_start_time: 1,
-        count: 1,
-        end: "latest",
-      }, generation);
+      }, generation, key);
       if (response.error) throw new Error(response.error.message ?? "Deriv subscription failed.");
       if (this.connectionGeneration !== generation) return;
       if (this.subscriptions.get(key) === subscription) {
         subscription.id = response.subscription?.id;
         this.reconnectDelay = 1000;
-        this.onStatus("Live");
       } else if (response.subscription?.id) {
         void this.send({ forget: response.subscription.id }, generation).catch((error: unknown) => {
           this.onError(error instanceof Error ? error : new Error("Could not close the market subscription."));

@@ -32,7 +32,7 @@ type MarketConsoleProps = {
 
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
-const SCAN_INTERVAL = 20;
+const SCAN_INTERVAL = 5;
 const DPO_PERIOD = 14;
 const DPO_SHIFT = Math.floor(DPO_PERIOD / 2) + 1;
 const DPO_WARMUP_TICKS = DPO_PERIOD + DPO_SHIFT;
@@ -121,8 +121,14 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         if (ready) state.previousDpo = dpo;
         const bias = dpo > 0 ? "bullish" : dpo < 0 ? "bearish" : "neutral";
 
-        if (ready && state.ticks % SCAN_INTERVAL === 0) {
-          appendEntry(`Market scan · ${MARKET_SYMBOL} · one-tick chart`, "info", quote.DT);
+        if (state.ticks % SCAN_INTERVAL === 0) {
+          appendEntry(
+            ready
+              ? `Market · ${MARKET_SYMBOL} · ${price.toFixed(2)} · DPO ${dpo >= 0 ? "+" : ""}${dpo.toFixed(4)} · ${bias}`
+              : `Market · ${MARKET_SYMBOL} · ${price.toFixed(2)} · DPO warm-up ${state.prices.length}/${DPO_WARMUP_TICKS} ticks`,
+            ready ? bias : "info",
+            quote.DT,
+          );
         }
 
         onMarketSignal?.({
