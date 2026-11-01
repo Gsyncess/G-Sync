@@ -1209,7 +1209,10 @@ async function startServer() {
         return;
       }
       if (stake > account.balance) {
-        response.status(400).json({ error: "The trade stake exceeds the selected account balance." });
+        response.status(400).json({
+          code: "INSUFFICIENT_BALANCE",
+          error: "The selected Deriv account does not have enough balance for this trade.",
+        });
         return;
       }
 
@@ -1266,6 +1269,7 @@ async function startServer() {
             response.write(`${JSON.stringify({
               type: "error",
               error: errorMessage,
+              ...(error instanceof DerivTradeError && error.code ? { code: error.code } : {}),
               tradeMayBeOpen: error instanceof DerivTradeError && error.tradeMayBeOpen,
             })}\n`);
             response.end();
@@ -1273,6 +1277,7 @@ async function startServer() {
         } else if (error instanceof DerivTradeError && !response.destroyed && !response.writableEnded) {
           response.status(error.tradeMayBeOpen ? 504 : 502).json({
             error: error.message,
+            ...(error.code ? { code: error.code } : {}),
             tradeMayBeOpen: error.tradeMayBeOpen,
           });
         } else if (!response.destroyed && !response.writableEnded) {

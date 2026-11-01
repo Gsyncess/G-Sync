@@ -121,6 +121,11 @@ function getTradeDirection(contractType: "CALL" | "PUT") {
   return contractType === "CALL" ? "RISE" : "FALL";
 }
 
+function getInsufficientBalanceMessage(account: DerivAccount, stake: number) {
+  const balance = Number.isFinite(account.balance) ? account.balance.toFixed(2) : "unavailable";
+  return `Insufficient ${account.currency} balance. Your account has ${balance} ${account.currency}, but the next stake is ${stake.toFixed(2)} ${account.currency}. The bot has stopped.`;
+}
+
 export function DashboardHome({ email, accountId, username, socketOnline, onSignOut }: DashboardHomeProps) {
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
@@ -615,6 +620,15 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
 
     const contractType = signal.crossover;
     const stake = runtime.nextStake ?? config.stakeAmount;
+    if (!Number.isFinite(account.balance) || stake > account.balance) {
+      runtime.running = false;
+      setBotRunning(false);
+      const message = getInsufficientBalanceMessage(account, stake);
+      setBotStatus(message);
+      notifyTradeError(message);
+      void refreshDerivAccounts();
+      return;
+    }
 
     runtime.inFlight = true;
     setTradeInProgress(true);
@@ -648,7 +662,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           runtime.running = false;
           setBotRunning(false);
           if (!tradeMayBeOpen) setOpenTradeDetails(null);
-          const errorMessage = typeof result.error === "string"
+          const errorMessage = result.code === "INSUFFICIENT_BALANCE"
+            ? getInsufficientBalanceMessage(account, stake)
+            : typeof result.error === "string"
             ? result.error
             : "Trade failed. The bot was stopped.";
           if (result.code === "SUBSCRIPTION_REQUIRED") {
@@ -656,6 +672,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             void refreshSubscription();
           }
           notifyTradeError(errorMessage);
+          if (result.code === "INSUFFICIENT_BALANCE") void refreshDerivAccounts();
           setBotStatus(
             tradeMayBeOpen
               ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
@@ -756,14 +773,16 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
               setOpenTradeDetails(null);
               setTradeProgressTicks(0);
             }
+            const errorMessage = update.code === "INSUFFICIENT_BALANCE"
+              ? getInsufficientBalanceMessage(account, stake)
+              : typeof update.error === "string" ? update.error : "Trade failed. Bot stopped.";
             setBotStatus(
               tradeMayBeOpen
                 ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
-                : typeof update.error === "string" ? update.error : "Trade failed. Bot stopped.",
+                : errorMessage,
             );
-            notifyTradeError(
-              typeof update.error === "string" ? update.error : "Trade failed. The bot was stopped.",
-            );
+            notifyTradeError(errorMessage);
+            if (update.code === "INSUFFICIENT_BALANCE") void refreshDerivAccounts();
             streamFailed = true;
             return;
           }
@@ -879,6 +898,18 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       runtime.inFlight ||
       runtime.unresolvedTrade
     ) return;
+    const nextStake = runtime.sessionLimitReached
+      ? botConfig.stakeAmount
+      : runtime.nextStake ?? botConfig.stakeAmount;
+    if (!Number.isFinite(selectedDerivAccount.balance) || nextStake > selectedDerivAccount.balance) {
+      runtime.running = false;
+      setBotRunning(false);
+      const message = getInsufficientBalanceMessage(selectedDerivAccount, nextStake);
+      setBotStatus(message);
+      notifyTradeError(message);
+      void refreshDerivAccounts();
+      return;
+    }
     if (runtime.sessionLimitReached) {
       runtime.sessionProfit = 0;
       runtime.nextStake = botConfig.stakeAmount;

@@ -5,11 +5,13 @@ import {
   ArrowLeft,
   BadgeCheck,
   Check,
-  CircleUserRound,
   Clock3,
   Copy,
   CreditCard,
+  Fingerprint,
+  Mail,
   ShieldCheck,
+  UserRound,
 } from "lucide-react";
 
 export type AppSubscription = {
@@ -123,6 +125,12 @@ export function SettingsPage({
     Array.from(accountId).reduce((sum, character) => sum + character.charCodeAt(0), 0) % avatarColors.length
   ];
   const expiresAt = formatExpiry(subscription?.expiresAt ?? null);
+  const initials = username
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || email.slice(0, 1).toUpperCase() || "U";
 
   useEffect(() => {
     setCopyError("");
@@ -230,34 +238,50 @@ export function SettingsPage({
   return (
     <section className="settings-page" aria-label="Profile and subscription settings">
       <header className="settings-page-heading">
-        <h1>Settings</h1>
-        <p>Manage your profile and bot subscription.</p>
+        <div>
+          <p className="settings-page-eyebrow">ACCOUNT</p>
+          <h1>My profile</h1>
+          <p>Your personal details and bot membership.</p>
+        </div>
       </header>
 
       <article className="settings-card profile-settings-card">
-        <div className="settings-card-heading">
-          <div className="settings-heading-icon"><CircleUserRound size={18} aria-hidden="true" /></div>
-          <div>
-            <h2>Your profile</h2>
-            <p>Your G-Sync account details</p>
-          </div>
-        </div>
-        <div className="profile-summary">
+        <div className="profile-cover">
           <div
             className="profile-avatar"
             style={{ backgroundColor: avatar.background, color: avatar.color }}
-            aria-hidden="true"
+            aria-label={`${username || "User"} profile avatar`}
+            role="img"
           >
-            <CircleUserRound size={31} />
+            {initials}
           </div>
-          <div className="profile-name">
-            <strong>{username || "User"}</strong>
-            <span>{email || "Email unavailable"}</span>
+          <div className="profile-identity">
+            <h2>{username || "User"}</h2>
+            <p>{email || "Email unavailable"}</p>
           </div>
+          {subscription?.enabled && (
+            <span className={`profile-membership ${subscription.active ? "profile-membership-active" : "profile-membership-expired"}`}>
+              {subscription.active ? <BadgeCheck size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
+              {subscriptionLoading ? "Checking" : subscription.active ? "Member" : "Expired"}
+            </span>
+          )}
         </div>
-        <div className="profile-account-id">
-          <span>Account ID</span>
-          <code>{accountId || "Unavailable"}</code>
+        <div className="profile-details">
+          <div className="profile-detail-row">
+            <span className="profile-detail-icon"><UserRound size={16} aria-hidden="true" /></span>
+            <span className="profile-detail-label">Username</span>
+            <strong>{username || "User"}</strong>
+          </div>
+          <div className="profile-detail-row">
+            <span className="profile-detail-icon"><Mail size={16} aria-hidden="true" /></span>
+            <span className="profile-detail-label">Email</span>
+            <strong>{email || "Email unavailable"}</strong>
+          </div>
+          <div className="profile-detail-row profile-detail-row-id">
+            <span className="profile-detail-icon"><Fingerprint size={16} aria-hidden="true" /></span>
+            <span className="profile-detail-label">Account ID</span>
+            <code>{accountId || "Unavailable"}</code>
+          </div>
         </div>
       </article>
 

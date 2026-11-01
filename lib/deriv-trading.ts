@@ -1,7 +1,11 @@
 import WebSocket from "ws";
 
 export class DerivTradeError extends Error {
-  constructor(message: string, readonly tradeMayBeOpen = false) {
+  constructor(
+    message: string,
+    readonly tradeMayBeOpen = false,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "DerivTradeError";
   }
@@ -20,7 +24,7 @@ type TradeOptions = {
 
 type DerivMessage = {
   msg_type?: string;
-  error?: { message?: string };
+  error?: { code?: string; message?: string };
   balance?: {
     balance?: unknown;
     currency?: unknown;
@@ -207,8 +211,8 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
       else if (socket.readyState === WebSocket.OPEN) socket.close();
     };
 
-    const fail = (message: string, tradeMayBeOpen = false) => {
-      finish(() => reject(new DerivTradeError(message, tradeMayBeOpen)));
+    const fail = (message: string, tradeMayBeOpen = false, code?: string) => {
+      finish(() => reject(new DerivTradeError(message, tradeMayBeOpen, code)));
     };
 
     const send = (payload: Record<string, unknown>, errorMessage: string) => {
@@ -244,9 +248,17 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
       }
 
       if (message.error) {
+        const errorMessage = message.error.message || "Deriv rejected the trade.";
+        const insufficientBalance = /insufficient.*(balance|funds)|balance.*insufficient|not enough.*(balance|funds)/i
+          .test(errorMessage);
         fail(
-          message.error.message || "Deriv rejected the trade.",
+          insufficientBalance
+            ? "Insufficient balance for this trade. The bot has stopped."
+            : errorMessage,
           phase === "contract",
+          insufficientBalance || /insufficient.?balance/i.test(message.error.code ?? "")
+            ? "INSUFFICIENT_BALANCE"
+            : undefined,
         );
         return;
       }

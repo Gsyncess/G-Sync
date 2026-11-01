@@ -1032,13 +1032,24 @@ input {
 }
 
 .settings-page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
   padding: 2px 2px 4px;
+}
+
+.settings-page-eyebrow {
+  margin: 0 0 5px !important;
+  color: #16845a !important;
+  font-size: 9px !important;
+  font-weight: 750;
+  letter-spacing: 0.14em;
 }
 
 .settings-page-heading h1 {
   margin: 0;
   color: #17213a;
-  font-size: 23px;
+  font-size: 25px;
   font-weight: 750;
   letter-spacing: -0.035em;
 }
@@ -1101,62 +1112,147 @@ input {
   margin-top: 18px;
 }
 
+.profile-settings-card {
+  overflow: hidden;
+  border-color: #e2ebe6;
+  padding: 0;
+}
+
+.profile-cover {
+  position: relative;
+  display: flex;
+  min-height: 132px;
+  align-items: center;
+  gap: 14px;
+  background:
+    radial-gradient(ellipse at 86% 0%, rgb(91 218 175 / 30%), transparent 42%),
+    linear-gradient(118deg, #123f38 0%, #126c56 58%, #16845a 100%);
+  padding: 22px 20px;
+}
+
 .profile-avatar {
   display: grid;
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   flex: none;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgb(23 33 58 / 5%);
-  border-radius: 17px;
+  border: 3px solid rgb(255 255 255 / 78%);
+  border-radius: 21px;
+  box-shadow: 0 5px 16px rgb(3 35 28 / 22%);
+  font-size: 21px;
+  font-weight: 750;
+  letter-spacing: -0.04em;
 }
 
-.profile-name {
+.profile-identity {
   display: grid;
   min-width: 0;
-  gap: 4px;
+  gap: 5px;
 }
 
-.profile-name strong {
+.profile-identity h2 {
   overflow: hidden;
-  color: #243248;
-  font-size: 14px;
+  margin: 0;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 750;
+  letter-spacing: -0.025em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-name span {
+.profile-identity p {
   overflow: hidden;
-  color: #768292;
+  margin: 0;
+  color: rgb(255 255 255 / 76%);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-account-id {
-  display: grid;
+.profile-membership {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
-  margin-top: 16px;
-  border-top: 1px solid #edf0f2;
-  padding-top: 12px;
+  margin-left: auto;
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 11%);
+  color: #fff;
+  padding: 6px 9px;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.profile-account-id > span,
+.profile-membership-active svg {
+  color: #a4f5d0;
+}
+
+.profile-membership-expired svg {
+  color: #ffd1a5;
+}
+
+.profile-details {
+  display: grid;
+  padding: 3px 18px;
+}
+
+.profile-detail-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 30px minmax(75px, 0.35fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid #edf1ef;
+  padding: 12px 0;
+}
+
+.profile-detail-row:last-child {
+  border-bottom: 0;
+}
+
+.profile-detail-icon {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 10px;
+  background: #eff7f3;
+  color: #16845a;
+}
+
+.profile-detail-label {
+  color: #788493;
+  font-size: 10px;
+}
+
+.profile-detail-row strong {
+  overflow: hidden;
+  color: #263447;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-detail-row code {
+  overflow-wrap: anywhere;
+  color: #526174;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 9px;
+  text-align: right;
+  user-select: text;
+}
+
 .payment-address-label {
   color: #8792a0;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-.profile-account-id code {
-  overflow-wrap: anywhere;
-  color: #526174;
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 10px;
-  user-select: text;
 }
 
 .subscription-badge {
