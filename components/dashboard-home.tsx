@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { MarketConsole, type MarketSignal } from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
+import { PaymentReturnPage } from "@/components/payment-return-page";
 import { RobotLogo } from "@/components/robot-logo";
 import {
   SettingsPage,
@@ -80,6 +81,11 @@ type BotRuntime = {
   nextStake: number | null;
   sessionProfit: number;
 };
+
+type PaymentScreen = {
+  orderId: string;
+  mode: "status" | "success" | "failed";
+} | null;
 
 type DashboardHomeProps = {
   email: string;
@@ -150,7 +156,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const [subscriptionError, setSubscriptionError] = useState("");
   const [profileAccountCode, setProfileAccountCode] = useState<string | null>(null);
   const [profileAccountCodeError, setProfileAccountCodeError] = useState("");
-  const [subscriptionPayment, setSubscriptionPayment] = useState<SubscriptionPayment | null>(null);
+  const [paymentScreen, setPaymentScreen] = useState<PaymentScreen>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentHistory, setPaymentHistory] = useState<SubscriptionPaymentRecord[]>([]);
@@ -315,64 +321,24 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     }
   }, [refreshPaymentHistory]);
 
+  const handlePaymentComplete = useCallback((expiresAt: string) => {
+    setSubscription({
+      enabled: true,
+      active: Date.parse(expiresAt) > Date.now(),
+      expiresAt,
+    });
+    void refreshPaymentHistory();
+  }, [refreshPaymentHistory]);
+
   useEffect(() => {
     void refreshSubscription();
     const intervalId = window.setInterval(() => void refreshSubscription(), 30_000);
     return () => window.clearInterval(intervalId);
   }, [refreshSubscription]);
 
-  useEffect(() => {
-    const paymentId = subscriptionPayment?.paymentId;
-    if (!paymentId || ["completed", "error", "cancelled", "expired", "mismatch"].includes(subscriptionPayment.status)) return;
-    let active = true;
-    const refreshPayment = async () => {
-      try {
-        const accessToken = await getSupabaseAccessToken();
-        const response = await fetch(`/api/subscription/payments/${encodeURIComponent(paymentId)}`, {
-          cache: "no-store",
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        const result = await response.json() as {
-          status?: unknown;
-          subscriptionExpiresAt?: unknown;
-          error?: unknown;
-        };
-        if (!response.ok || typeof result.status !== "string") {
-          throw new Error(typeof result.error === "string" ? result.error : "Could not check payment status.");
-        }
-        if (!active) return;
-        setSubscriptionPayment((current) => current?.paymentId === paymentId
-          ? {
-              ...current,
-              status: result.status as string,
-            }
-          : current);
-        if (typeof result.subscriptionExpiresAt === "string") {
-          setSubscription({
-            enabled: true,
-            active: Date.parse(result.subscriptionExpiresAt) > Date.now(),
-            expiresAt: result.subscriptionExpiresAt,
-          });
-        }
-        if (result.status === "completed") void refreshPaymentHistory();
-        setSubscriptionError("");
-      } catch (error) {
-        if (active) {
-          setSubscriptionError(error instanceof Error ? error.message : "Could not check payment status.");
-        }
-      }
-    };
-    void refreshPayment();
-    const intervalId = window.setInterval(() => void refreshPayment(), 5_000);
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [refreshPaymentHistory, subscriptionPayment?.paymentId, subscriptionPayment?.status]);
-
   const handleStartCheckout = async () => {
     setCheckoutOpen(true);
-    setSubscriptionPayment(null);
+    setPaymentScreen(null);
     setPaymentCurrencies([]);
     setPaymentCurrenciesLoading(true);
     setSubscriptionError("");
@@ -415,9 +381,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       if (!result.paymentId || !result.orderId || !result.payAddress || !Number.isFinite(result.payAmount)) {
         throw new Error("Payment instructions were incomplete. Please try again.");
       }
-      setSubscriptionPayment(result);
+      setPaymentScreen({ orderId: result.orderId, mode: "status" });
       setCheckoutOpen(false);
-      router.push(`/payment/status?order_id=${encodeURIComponent(result.orderId)}`);
+      setActiveView("settings");
+      router.replace(`/?payment_order=${encodeURIComponent(result.orderId)}&payment_mode=status`);
     } catch (error) {
       setSubscriptionError(error instanceof Error ? error.message : "Could not prepare payment.");
     } finally {
@@ -489,8 +456,18 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     const url = new URL(window.location.href);
     const oauthResult = url.searchParams.get("deriv_oauth");
     const requestedView = url.searchParams.get("view");
+    const paymentOrder = url.searchParams.get("payment_order");
+    const paymentMode = url.searchParams.get("payment_mode");
     if (requestedView === "settings") setActiveView("settings");
     if (requestedView) url.searchParams.delete("view");
+    if (
+      paymentOrder &&
+      /^gs-[a-f\d]{32}$/i.test(paymentOrder) &&
+      (paymentMode === "status" || paymentMode === "success" || paymentMode === "failed")
+    ) {
+      setPaymentScreen({ orderId: paymentOrder, mode: paymentMode });
+      setActiveView("settings");
+    }
     if (oauthResult) {
       setDerivMessage(
         oauthResult === "connected"
@@ -1077,7 +1054,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   };
 
   return (
-    <main className={`dashboard-shell${checkoutOpen ? " dashboard-shell-checkout" : ""}`}>
+    <main className="dashboard-shell">
       {tradeErrorToast && (
         <div className="trade-error-toast" role="alert" key={tradeErrorToast.id}>
           <AlertTriangle size={18} aria-hidden="true" />
@@ -1097,7 +1074,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           </button>
         </div>
       )}
-      {!checkoutOpen && <header className="dashboard-header">
+      <header className="dashboard-header">
         <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
           <span className="dashboard-brand-icon"><RobotLogo className="size-7" /></span>
           <span>G-Sync<span className="dashboard-brand-dot">.</span></span>
@@ -1183,10 +1160,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             <LogOut size={18} />
           </button>
         </div>
-      </header>}
-
+      </header>
       <section
-        className={`dashboard-content ${checkoutOpen ? "dashboard-content-checkout" : activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
+        className={`dashboard-content ${activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
         aria-label="Dashboard pages"
       >
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
@@ -1398,7 +1374,24 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           </section>
         </div>
         <div className="dashboard-settings-view" id="dashboard-settings-view" hidden={activeView !== "settings"}>
-          <SettingsPage
+          {paymentScreen ? (
+            <PaymentReturnPage
+              mode={paymentScreen.mode}
+              orderId={paymentScreen.orderId}
+              onBackToSettings={() => {
+                setPaymentScreen(null);
+                setCheckoutOpen(false);
+                router.replace("/?view=settings");
+              }}
+              onGoToDashboard={() => {
+                setPaymentScreen(null);
+                setCheckoutOpen(false);
+                setActiveView("home");
+                router.replace("/");
+              }}
+              onPaymentComplete={handlePaymentComplete}
+            />
+          ) : <SettingsPage
             accountId={profileAccountCode ?? (profileAccountCodeError ? "Unavailable" : "Loading…")}
             accountIdError={profileAccountCodeError}
             username={username}
@@ -1416,11 +1409,11 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             onStartCheckout={() => void handleStartCheckout()}
             onSubscribe={(currency) => void handleSubscribe(currency)}
             onBackFromCheckout={() => setCheckoutOpen(false)}
-          />
+          />}
         </div>
       </section>
 
-      {!checkoutOpen && <nav className="dashboard-bottom-nav" aria-label="Main navigation">
+      <nav className="dashboard-bottom-nav" aria-label="Main navigation">
         <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined} aria-controls="dashboard-home-view">
           <Home size={19} /><span>Home</span>
         </button>
@@ -1433,7 +1426,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         <button type="button" className={`bottom-nav-item ${activeView === "settings" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("settings")} aria-current={activeView === "settings" ? "page" : undefined} aria-controls="dashboard-settings-view">
           <Settings2 size={19} /><span>Settings</span>
         </button>
-      </nav>}
+      </nav>
     </main>
   );
 }

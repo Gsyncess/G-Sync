@@ -1,4 +1,4 @@
-import { PaymentReturnPage } from "@/components/payment-return-page";
+import { redirect } from "next/navigation";
 
 type PaymentSuccessPageProps = {
   searchParams: Promise<{ order_id?: string | string[] }>;
@@ -6,5 +6,6 @@ type PaymentSuccessPageProps = {
 
 export default async function PaymentSuccessPage({ searchParams }: PaymentSuccessPageProps) {
   const { order_id: orderId } = await searchParams;
-  return <PaymentReturnPage mode="success" orderId={typeof orderId === "string" ? orderId : ""} />;
+  const paymentOrder = typeof orderId === "string" ? orderId : "";
+  redirect(`/?payment_order=${encodeURIComponent(paymentOrder)}&payment_mode=success`);
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import Image from "next/image";
 import { BadgeCheck, Check, CircleAlert, Clock3, Copy, LoaderCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -22,9 +21,25 @@ type PaymentDetails = {
 type PaymentReturnPageProps = {
   mode: PaymentReturnMode;
   orderId: string;
+  onBackToSettings: () => void;
+  onGoToDashboard: () => void;
+  onPaymentComplete: (expiresAt: string) => void;
 };
 
 const terminalStatuses = new Set(["completed", "error", "cancelled", "expired", "mismatch"]);
+
+function formatStatus(status: string) {
+  const labels: Record<string, string> = {
+    new: "Awaiting payment",
+    pending: "Awaiting payment",
+    completed: "Payment complete",
+    error: "Payment failed",
+    cancelled: "Payment cancelled",
+    expired: "Payment expired",
+    mismatch: "Payment needs review",
+  };
+  return labels[status] ?? status.replaceAll("_", " ");
+}
 
 function statusMessage(status: string) {
   if (status === "completed") return "Payment confirmed. Your bot subscription is active.";
@@ -35,11 +50,18 @@ function statusMessage(status: string) {
   return "Waiting for payment confirmation.";
 }
 
-export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
+export function PaymentReturnPage({
+  mode,
+  orderId,
+  onBackToSettings,
+  onGoToDashboard,
+  onPaymentComplete,
+}: PaymentReturnPageProps) {
   const [payment, setPayment] = useState<PaymentDetails | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const paymentStatusRef = useRef("");
+  const reportedExpiryRef = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -64,6 +86,11 @@ export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
           paymentStatusRef.current = result.status;
           setPayment(result);
           setError("");
+          if (result.status === "completed" && result.subscriptionExpiresAt &&
+            reportedExpiryRef.current !== result.subscriptionExpiresAt) {
+            reportedExpiryRef.current = result.subscriptionExpiresAt;
+            onPaymentComplete(result.subscriptionExpiresAt);
+          }
         }
       } catch (refreshError) {
         if (active) {
@@ -80,7 +107,7 @@ export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [orderId]);
+  }, [onPaymentComplete, orderId]);
 
   const paymentStatus = payment?.status ?? "";
   const subscriptionExpiry = payment?.subscriptionExpiresAt;
@@ -118,8 +145,11 @@ export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
   };
 
   return (
-    <main className="payment-return-page">
-      <section className="payment-return-card" aria-live="polite">
+    <section className="payment-return-panel">
+      <button type="button" className="payment-return-back" onClick={onBackToSettings}>
+        <span aria-hidden="true">←</span> Back to Settings
+      </button>
+      <div className="payment-return-card">
         <div className={`payment-return-icon ${isComplete ? "payment-return-icon-success" : isFailed ? "payment-return-icon-failed" : ""}`}>
           {payment ? showIcon : <LoaderCircle className="checkout-spinner-icon" size={26} aria-hidden="true" />}
         </div>
@@ -129,13 +159,9 @@ export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
         {error && <p className="settings-error" role="alert">{error}</p>}
         {payment && (
           <>
-            <div className={`payment-status payment-status-${payment.status}`}>
+            <div className={`payment-status payment-status-${payment.status}`} role="status" aria-live="polite">
               <span className="status-dot" />
-              {payment.status === "completed"
-                ? "Payment complete"
-                : payment.status === "new" || payment.status === "pending"
-                  ? "Awaiting payment"
-                  : payment.status}
+              {formatStatus(payment.status)}
             </div>
             {isPending && (
               <>
@@ -161,26 +187,22 @@ export function PaymentReturnPage({ mode, orderId }: PaymentReturnPageProps) {
               </>
             )}
             {isPending && (
-              <p className="payment-return-note">Keep this page open while the transaction is confirmed. Access is enabled only after the verified payment notification.</p>
+              <p className="payment-return-note">
+                Keep this page open while your payment is confirmed. Your subscription will activate automatically once payment is verified.
+              </p>
             )}
           </>
-        )}
-        {isFailed && (
-          <Link className="subscription-start-button payment-return-link" href="/?view=settings">
-            Return to Settings
-          </Link>
         )}
         {isComplete && (
           <>
             {formattedSubscriptionExpiry && <p className="payment-return-note">Access until {formattedSubscriptionExpiry}</p>}
-            <Link className="subscription-start-button payment-return-link" href="/">
+            <button type="button" className="subscription-start-button payment-return-link" onClick={onGoToDashboard}>
               Continue to dashboard
-            </Link>
+            </button>
           </>
         )}
-        {!payment && <Link className="payment-return-dashboard-link" href="/">Return to G-Sync</Link>}
         {payment && <code className="checkout-order-id">{payment.orderId}</code>}
-      </section>
-    </main>
+      </div>
+    </section>
   );
 }
