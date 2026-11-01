@@ -72,12 +72,6 @@ const securityHeaders = {
 
 const oauthCookiePath = "/api/deriv/oauth/";
 const derivCookiePath = "/api/deriv";
-const derivSessionStore = new Map<string, {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-  accountId: string | null;
-}>();
 const activeDerivTrades = new Set<string>();
 
 async function authenticateSupabaseRequest(request: express.Request) {
@@ -171,18 +165,6 @@ function readEncodedCookie(request: express.Request, name: string) {
   return value ? Buffer.from(value, "base64url").toString("utf8") : null;
 }
 
-function saveDerivSession(sessionKey: string, payload: { accessToken: string; refreshToken?: string; expiresIn?: number; accountId?: string | null }) {
-  const expiresInMs = Number.isFinite(payload.expiresIn) && payload.expiresIn! > 0
-    ? payload.expiresIn! * 1000
-    : 60 * 60 * 1000;
-  derivSessionStore.set(sessionKey, {
-    accessToken: payload.accessToken,
-    refreshToken: payload.refreshToken ?? "",
-    expiresAt: Date.now() + expiresInMs,
-    accountId: payload.accountId ?? null,
-  });
-}
-
 async function refreshDerivAccessToken(request: express.Request, response: express.Response) {
   const refreshToken = readEncodedCookie(request, "deriv_refresh_token");
   if (!refreshToken) return null;
@@ -201,7 +183,6 @@ async function refreshDerivAccessToken(request: express.Request, response: expre
     if (!tokenResponse.ok) {
       clearCookie(response, "deriv_access_token", derivCookiePath);
       clearCookie(response, "deriv_refresh_token", derivCookiePath);
-      derivSessionStore.delete("default");
       return null;
     }
 
@@ -220,11 +201,6 @@ async function refreshDerivAccessToken(request: express.Request, response: expre
     const encodedRefreshToken = Buffer.from(nextRefresh).toString("base64url");
     appendCookie(response, "deriv_access_token", encodedAccessToken, derivCookiePath, Math.max(1, Math.floor(nextExpiresIn)));
     appendCookie(response, "deriv_refresh_token", encodedRefreshToken, derivCookiePath, 30 * 24 * 60 * 60);
-    saveDerivSession("default", {
-      accessToken: tokenData.access_token,
-      refreshToken: nextRefresh,
-      expiresIn: nextExpiresIn,
-    });
     return tokenData.access_token;
   } catch (error) {
     console.error("Could not refresh Deriv token.", error);
@@ -591,6 +567,21 @@ async function startServer() {
     }
 
     const orderId = `gs-${randomBytes(16).toString("hex")}`;
+    const metadata = user.user_metadata ?? {};
+    const customerName = [
+      metadata.full_name,
+      metadata.name,
+      metadata.username,
+      user.email?.split("@")[0],
+    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ?.trim()
+      .replace(/[\r\n]+/g, " ")
+      .slice(0, 80) ?? "User";
+    const customerEmail = user.email ?? "";
+    if (!customerEmail) {
+      response.status(400).json({ error: "Add an email address to your account before purchasing a subscription." });
+      return;
+    }
     let providerResponse: Response;
     try {
       providerResponse = await fetch("https://api.nowpayments.io/v1/payment", {
@@ -605,7 +596,8 @@ async function startServer() {
           pay_currency: SUBSCRIPTION_PAY_CURRENCY,
           ipn_callback_url: callbackUrl.toString(),
           order_id: orderId,
-          order_description: "G-Sync 12-hour bot subscription",
+          order_description: `G-Sync 12-hour bot subscription for ${customerName}`,
+          customer_email: customerEmail,
         }),
         signal: AbortSignal.timeout(15_000),
       });
@@ -648,6 +640,8 @@ async function startServer() {
         payment_id: paymentId,
         user_id: user.id,
         order_id: orderId,
+        customer_email: customerEmail || null,
+        customer_name: customerName,
         price_amount: SUBSCRIPTION_PRICE_USD,
         price_currency: "usd",
         pay_currency: paymentData.pay_currency,
@@ -668,6 +662,7 @@ async function startServer() {
 
     response.status(201).json({
       paymentId,
+      orderId,
       payAddress,
       payAmount,
       payCurrency: paymentData.pay_currency,
@@ -739,7 +734,7 @@ async function startServer() {
     const [{ data: payment, error: paymentError }, subscription] = await Promise.all([
       supabaseAdmin
         .from("nowpayments_payments")
-        .select("payment_id, pay_address, pay_amount, pay_currency, payment_status, payment_expires_at")
+        .select("payment_id, order_id, pay_address, pay_amount, pay_currency, payment_status, payment_expires_at")
         .eq("payment_id", paymentId)
         .eq("user_id", user.id)
         .maybeSingle(),
@@ -755,6 +750,7 @@ async function startServer() {
     }
     response.json({
       paymentId: payment.payment_id,
+      orderId: payment.order_id,
       payAddress: payment.pay_address,
       payAmount: Number(payment.pay_amount),
       payCurrency: payment.pay_currency,
@@ -944,11 +940,6 @@ async function startServer() {
           30 * 24 * 60 * 60,
         );
       }
-      saveDerivSession("default", {
-        accessToken,
-        refreshToken,
-        expiresIn: expiresInSeconds,
-      });
       redirectToResult("connected");
     } catch (error) {
       console.error("Deriv OAuth token exchange could not be completed.", error);
@@ -960,13 +951,6 @@ async function startServer() {
   app.get("/api/deriv/session", async (request, response) => {
     response.set("Cache-Control", "no-store");
     let accessToken = readEncodedCookie(request, "deriv_access_token");
-    const storedSession = derivSessionStore.get("default");
-    if (!accessToken && storedSession && storedSession.expiresAt > Date.now()) {
-      accessToken = storedSession.accessToken;
-      const encodedToken = Buffer.from(accessToken).toString("base64url");
-      appendCookie(response, "deriv_access_token", encodedToken, derivCookiePath, Math.max(1, Math.floor((storedSession.expiresAt - Date.now()) / 1000)));
-    }
-
     if (!accessToken) {
       const refreshedToken = await refreshDerivAccessToken(request, response);
       accessToken = refreshedToken ?? null;
@@ -1000,7 +984,6 @@ async function startServer() {
             }
             clearCookie(response, "deriv_access_token", derivCookiePath);
             clearCookie(response, "deriv_refresh_token", derivCookiePath);
-            derivSessionStore.delete("default");
             response.json({ connected: false, expired: true });
             return;
           }
@@ -1095,7 +1078,6 @@ async function startServer() {
   app.post("/api/deriv/session/disconnect", (_request, response) => {
     clearCookie(response, "deriv_access_token", derivCookiePath);
     clearCookie(response, "deriv_refresh_token", derivCookiePath);
-    derivSessionStore.delete("default");
     response.set("Cache-Control", "no-store");
     response.json({ connected: false });
   });

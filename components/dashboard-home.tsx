@@ -138,6 +138,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const [subscriptionError, setSubscriptionError] = useState("");
   const [subscriptionPayment, setSubscriptionPayment] = useState<SubscriptionPayment | null>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [paymentHistory, setPaymentHistory] = useState<SubscriptionPaymentRecord[]>([]);
   const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(true);
   const [paymentHistoryError, setPaymentHistoryError] = useState("");
@@ -323,6 +324,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   }, [refreshPaymentHistory, subscriptionPayment?.paymentId, subscriptionPayment?.status]);
 
   const handleSubscribe = async () => {
+    setCheckoutOpen(true);
+    setSubscriptionPayment(null);
     setPaymentBusy(true);
     setSubscriptionError("");
     try {
@@ -336,7 +339,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       if (!response.ok) {
         throw new Error(typeof result.error === "string" ? result.error : "Could not prepare payment.");
       }
-      if (!result.paymentId || !result.payAddress || !Number.isFinite(result.payAmount)) {
+      if (!result.paymentId || !result.orderId || !result.payAddress || !Number.isFinite(result.payAmount)) {
         throw new Error("Payment instructions were incomplete. Please try again.");
       }
       setSubscriptionPayment(result);
@@ -467,9 +470,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       const message = update as Record<string, unknown>;
       if (message.type === "error") {
         setBalanceRefreshError(
-          typeof message.error === "string" ? message.error : "Live balance updates are unavailable.",
+          typeof message.error === "string"
+            ? `${message.error} Reconnecting automatically.`
+            : "Live balance updates are unavailable. Reconnecting automatically.",
         );
-        source.close();
         return;
       }
       const accountId = message.accountId;
@@ -492,9 +496,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     };
     source.onerror = () => {
       setBalanceRefreshError("Live balance updates disconnected. Checking balances periodically.");
+      void refreshDerivAccounts();
     };
     return () => source.close();
-  }, [derivConnected, selectedDerivAccountId]);
+  }, [derivConnected, refreshDerivAccounts, selectedDerivAccountId]);
 
   useEffect(() => {
     setHistoryReady(false);
@@ -963,7 +968,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   };
 
   return (
-    <main className="dashboard-shell">
+    <main className={`dashboard-shell${checkoutOpen ? " dashboard-shell-checkout" : ""}`}>
       {tradeErrorToast && (
         <div className="trade-error-toast" role="alert" key={tradeErrorToast.id}>
           <AlertTriangle size={18} aria-hidden="true" />
@@ -983,7 +988,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           </button>
         </div>
       )}
-      <header className="dashboard-header">
+      {!checkoutOpen && <header className="dashboard-header">
         <a href="#home" className="dashboard-brand" aria-label="G-Sync home">
           <span className="dashboard-brand-icon"><RobotLogo className="size-7" /></span>
           <span>G-Sync<span className="dashboard-brand-dot">.</span></span>
@@ -1069,10 +1074,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             <LogOut size={18} />
           </button>
         </div>
-      </header>
+      </header>}
 
       <section
-        className={`dashboard-content ${activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
+        className={`dashboard-content ${checkoutOpen ? "dashboard-content-checkout" : activeView === "signals" || activeView === "settings" ? "dashboard-content-scroll" : "dashboard-content-pinned"}`}
         aria-label="Dashboard pages"
       >
         <div className="dashboard-home-view" id="dashboard-home-view" hidden={activeView !== "home"}>
@@ -1279,16 +1284,18 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             subscriptionLoading={subscriptionLoading}
             subscriptionError={subscriptionError}
             payment={subscriptionPayment}
+            checkoutOpen={checkoutOpen}
             paymentHistory={paymentHistory}
             paymentHistoryLoading={paymentHistoryLoading}
             paymentHistoryError={paymentHistoryError}
             paymentBusy={paymentBusy}
             onSubscribe={() => void handleSubscribe()}
+            onBackFromCheckout={() => setCheckoutOpen(false)}
           />
         </div>
       </section>
 
-      <nav className="dashboard-bottom-nav" aria-label="Main navigation">
+      {!checkoutOpen && <nav className="dashboard-bottom-nav" aria-label="Main navigation">
         <button type="button" className={`bottom-nav-item ${activeView === "home" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("home")} aria-current={activeView === "home" ? "page" : undefined} aria-controls="dashboard-home-view">
           <Home size={19} /><span>Home</span>
         </button>
@@ -1301,7 +1308,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         <button type="button" className={`bottom-nav-item ${activeView === "settings" ? "bottom-nav-active" : ""}`} onClick={() => setActiveView("settings")} aria-current={activeView === "settings" ? "page" : undefined} aria-controls="dashboard-settings-view">
           <Settings2 size={19} /><span>Settings</span>
         </button>
-      </nav>
+      </nav>}
     </main>
   );
 }

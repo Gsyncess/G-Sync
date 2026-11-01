@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { io } from "socket.io-client";
 import {
@@ -37,6 +37,8 @@ export function MobileAuth() {
   const [accountId, setAccountId] = useState("");
   const [accountName, setAccountName] = useState("");
   const [splashComplete, setSplashComplete] = useState(false);
+  const accessTokenRef = useRef("");
+  const authenticatedRef = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -45,10 +47,13 @@ export function MobileAuth() {
     }, 8000);
     const socket = io({
       autoConnect: false,
-      reconnectionAttempts: 8,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 5000,
-      timeout: 10000,
+      auth: (callback) => callback({ accessToken: accessTokenRef.current }),
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.5,
+      timeout: 20000,
     });
 
     socket.on("sync:ready", () => {
@@ -58,16 +63,31 @@ export function MobileAuth() {
     socket.on("sync:pong", ({ clientTime }: { clientTime: number }) => {
       if (Number.isFinite(clientTime)) setRealtimeLatency(Date.now() - clientTime);
     });
-    socket.on("connect_error", () => setSocketOnline(false));
+    socket.on("connect_error", (error) => {
+      console.warn("Realtime connection attempt failed; Socket.IO will retry.", error.message);
+      setSocketOnline(false);
+    });
     socket.on("disconnect", () => {
       setSocketOnline(false);
       setRealtimeLatency(null);
     });
+    socket.io.on("reconnect_attempt", () => setSocketOnline(false));
+
+    const reconnectWhenOnline = () => {
+      if (authenticatedRef.current && !socket.connected) socket.connect();
+    };
+    const reconnectWhenVisible = () => {
+      if (document.visibilityState === "visible") reconnectWhenOnline();
+    };
+    window.addEventListener("online", reconnectWhenOnline);
+    document.addEventListener("visibilitychange", reconnectWhenVisible);
 
     let unsubscribeFromAuth = () => {};
     if (supabase) {
       const { data } = supabase.auth.onAuthStateChange((_event, session) => {
         if (!session?.access_token) {
+          accessTokenRef.current = "";
+          authenticatedRef.current = false;
           setAuthenticated(false);
           setAccountEmail("");
           setAccountId("");
@@ -76,6 +96,8 @@ export function MobileAuth() {
           return;
         }
 
+        accessTokenRef.current = session.access_token;
+        authenticatedRef.current = true;
         setAuthenticated(true);
         const userEmail = session.user.email ?? "";
         const metadataName = session.user.user_metadata.username
@@ -88,7 +110,6 @@ export function MobileAuth() {
             ? metadataName.trim()
             : userEmail.split("@")[0] || "User",
         );
-        socket.auth = { accessToken: session.access_token };
         if (socket.connected) socket.disconnect();
         socket.connect();
       });
@@ -96,6 +117,8 @@ export function MobileAuth() {
 
       void supabase.auth.getSession().then(({ data: sessionData, error }) => {
         if (error || !sessionData.session) return;
+        accessTokenRef.current = sessionData.session.access_token;
+        authenticatedRef.current = true;
         setAuthenticated(true);
         const userEmail = sessionData.session.user.email ?? "";
         const metadataName = sessionData.session.user.user_metadata.username
@@ -108,14 +131,16 @@ export function MobileAuth() {
             ? metadataName.trim()
             : userEmail.split("@")[0] || "User",
         );
-        socket.auth = { accessToken: sessionData.session.access_token };
         socket.connect();
       });
     }
 
     return () => {
       window.clearTimeout(timer);
+      window.removeEventListener("online", reconnectWhenOnline);
+      document.removeEventListener("visibilitychange", reconnectWhenVisible);
       unsubscribeFromAuth();
+      socket.io.removeAllListeners("reconnect_attempt");
       socket.removeAllListeners();
       socket.disconnect();
     };

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  ArrowLeft,
   BadgeCheck,
   Check,
   CircleUserRound,
@@ -19,6 +20,7 @@ export type AppSubscription = {
 
 export type SubscriptionPayment = {
   paymentId: string;
+  orderId: string;
   payAddress: string;
   payAmount: number;
   payCurrency: string;
@@ -49,11 +51,13 @@ type SettingsPageProps = {
   subscriptionLoading: boolean;
   subscriptionError: string;
   payment: SubscriptionPayment | null;
+  checkoutOpen: boolean;
   paymentHistory: SubscriptionPaymentRecord[];
   paymentHistoryLoading: boolean;
   paymentHistoryError: string;
   paymentBusy: boolean;
   onSubscribe: () => void;
+  onBackFromCheckout: () => void;
 };
 
 const avatarColors = [
@@ -105,11 +109,13 @@ export function SettingsPage({
   subscriptionLoading,
   subscriptionError,
   payment,
+  checkoutOpen,
   paymentHistory,
   paymentHistoryLoading,
   paymentHistoryError,
   paymentBusy,
   onSubscribe,
+  onBackFromCheckout,
 }: SettingsPageProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
@@ -135,6 +141,91 @@ export function SettingsPage({
       setCopyError("Could not copy the address. Select and copy it manually.");
     }
   };
+
+  if (checkoutOpen) {
+    return (
+      <section className="subscription-checkout" aria-label="Subscription payment">
+        <button
+          type="button"
+          className="checkout-back-button"
+          onClick={onBackFromCheckout}
+          aria-label="Back to settings"
+        >
+          <ArrowLeft size={20} aria-hidden="true" />
+          <span>Back</span>
+        </button>
+        <div className="checkout-content">
+          <div className="checkout-icon"><CreditCard size={22} aria-hidden="true" /></div>
+          <p className="checkout-eyebrow">BOT SUBSCRIPTION</p>
+          <h1>Complete your payment</h1>
+          <p className="checkout-subtitle">Your bot access starts automatically after NOWPayments confirms your payment.</p>
+          <div className="checkout-order-card">
+            <div className="checkout-order-price">
+              <span>Subscription</span>
+              <strong>$5.00 USD</strong>
+            </div>
+            <div className="checkout-order-duration">12 hours of bot access</div>
+            {payment?.orderId && (
+              <div className="checkout-order-id">
+                <span>Order ID</span>
+                <code>{payment.orderId}</code>
+              </div>
+            )}
+          </div>
+          {subscriptionError && <p className="settings-error" role="alert">{subscriptionError}</p>}
+          {paymentBusy && !payment ? (
+            <div className="checkout-loading" role="status">
+              <span className="checkout-spinner" />
+              <span>Preparing your secure payment…</span>
+            </div>
+          ) : payment ? (
+            <div className="checkout-payment-details" aria-live="polite">
+              <div className={`payment-status payment-status-${payment.status}`}>
+                <span className="status-dot" />
+                {formatPaymentStatus(payment.status)}
+              </div>
+              {payment.status === "finished" ? (
+                <div className="checkout-payment-complete" role="status">
+                  <BadgeCheck size={24} aria-hidden="true" />
+                  <strong>Payment confirmed</strong>
+                  <span>Your subscription is active. You can return to Settings.</span>
+                </div>
+              ) : ["failed", "refunded", "expired"].includes(payment.status) ? (
+                <p className="checkout-payment-note">
+                  This payment is {payment.status}. Return to Settings to start a new payment.
+                </p>
+              ) : (
+                <>
+                  <div className="checkout-crypto-amount">
+                    <span>Send exactly</span>
+                    <strong>{payment.payAmount} {payment.payCurrency.toUpperCase()}</strong>
+                  </div>
+                  <div className="payment-network">Network: TRON (TRC20)</div>
+                  <span className="payment-address-label">Payment address</span>
+                  <code className="payment-address">{payment.payAddress}</code>
+                  <button type="button" className="payment-copy-button" onClick={() => void copyAddress()}>
+                    {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
+                    {copied ? "Address copied" : "Copy address"}
+                  </button>
+                  {copyError && <p className="settings-error" role="alert">{copyError}</p>}
+                  <p className="payment-safety-note">
+                    Pay from your wallet using USDT on the TRC20 network. No amount entry or NOWPayments website is needed.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <button type="button" className="subscription-start-button checkout-retry-button" onClick={onSubscribe}>
+              Try payment again
+            </button>
+          )}
+          <p className="checkout-account-note">
+            Payment order for {username || "User"}{email ? ` · ${email}` : ""}
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="settings-page" aria-label="Profile and subscription settings">
@@ -199,13 +290,12 @@ export function SettingsPage({
         </article>
       )}
 
-      {subscription?.enabled ? (
-        <>
+      {subscription?.enabled && !subscription.active && (
         <article className="settings-card subscription-payment-card">
           <div className="settings-card-heading">
             <div className="settings-heading-icon"><CreditCard size={18} aria-hidden="true" /></div>
             <div>
-              <h2>{subscription.active ? "Renew subscription" : "Subscribe to the bot"}</h2>
+              <h2>Subscribe to the bot</h2>
               <p>Secure in-app crypto payment</p>
             </div>
           </div>
@@ -217,39 +307,18 @@ export function SettingsPage({
             Pay exactly the amount shown in USDT on the TRC20 network. Payment instructions stay in this app.
           </p>
           {subscriptionError && <p className="settings-error" role="alert">{subscriptionError}</p>}
-          {payment && !["failed", "refunded", "expired"].includes(payment.status) ? (
-            <div className="payment-instructions" aria-live="polite">
-              <div className={`payment-status payment-status-${payment.status}`}>
-                <span className="status-dot" />
-                {formatPaymentStatus(payment.status)}
-              </div>
-              <div className="payment-amount">
-                <span>Send exactly</span>
-                <strong>{payment.payAmount} {payment.payCurrency.toUpperCase()}</strong>
-              </div>
-              <div className="payment-network">Network: TRON (TRC20)</div>
-              <span className="payment-address-label">Payment address</span>
-              <code className="payment-address">{payment.payAddress}</code>
-              <button type="button" className="payment-copy-button" onClick={() => void copyAddress()}>
-                {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-                {copied ? "Address copied" : "Copy address"}
-              </button>
-              {copyError && <p className="settings-error" role="alert">{copyError}</p>}
-              <p className="payment-safety-note">
-                Only send USDT using the TRC20 network and the exact amount above. Access activates after the payment is confirmed.
-              </p>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="subscription-start-button"
-              disabled={paymentBusy || subscriptionLoading}
-              onClick={onSubscribe}
-            >
-              {paymentBusy ? "Preparing in-app payment…" : subscription.active ? "Renew for $5" : "Subscribe for $5"}
-            </button>
-          )}
+          <button
+            type="button"
+            className="subscription-start-button"
+            disabled={paymentBusy || subscriptionLoading}
+            onClick={onSubscribe}
+          >
+            {paymentBusy ? "Preparing in-app payment…" : "Subscribe for $5"}
+          </button>
         </article>
+      )}
+
+      {subscription?.enabled && (
         <article className="settings-card payment-history-card">
           <div className="settings-card-heading">
             <div className="settings-heading-icon"><Clock3 size={18} aria-hidden="true" /></div>
@@ -288,8 +357,9 @@ export function SettingsPage({
             </ul>
           )}
         </article>
-        </>
-      ) : subscriptionLoading || subscriptionError ? (
+      )}
+
+      {!subscription && (subscriptionLoading || subscriptionError) ? (
         <article className="settings-card subscription-status-card" role={subscriptionError ? "alert" : "status"}>
           <div className="settings-card-heading">
             <div className="settings-heading-icon"><ShieldCheck size={18} aria-hidden="true" /></div>
@@ -299,7 +369,7 @@ export function SettingsPage({
             </div>
           </div>
         </article>
-      ) : (
+      ) : subscription && !subscription.enabled ? (
         <article className="settings-card subscription-status-card subscription-free-card">
           <div className="settings-card-heading">
             <div className="settings-heading-icon"><BadgeCheck size={18} aria-hidden="true" /></div>
@@ -313,7 +383,7 @@ export function SettingsPage({
             You can use the bot without a subscription.
           </p>
         </article>
-      )}
+      ) : null}
     </section>
   );
 }

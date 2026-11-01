@@ -102,6 +102,8 @@ create table if not exists public.nowpayments_payments (
   payment_id text primary key,
   user_id uuid not null references auth.users (id) on delete cascade,
   order_id text not null unique,
+  customer_email text,
+  customer_name text,
   price_amount numeric not null,
   price_currency text not null,
   pay_currency text not null,
@@ -117,7 +119,9 @@ create table if not exists public.nowpayments_payments (
 );
 
 alter table public.nowpayments_payments
-  add column if not exists payment_expires_at timestamptz;
+  add column if not exists payment_expires_at timestamptz,
+  add column if not exists customer_email text,
+  add column if not exists customer_name text;
 
 create index if not exists nowpayments_payments_user_created_idx
   on public.nowpayments_payments (user_id, created_at desc);
