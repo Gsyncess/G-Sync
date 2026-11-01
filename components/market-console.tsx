@@ -11,18 +11,15 @@ type ConsoleEntry = {
 };
 
 type IndicatorState = {
-  fast: number | null;
-  slow: number | null;
-  signal: number | null;
+  prices: number[];
   ticks: number;
-  previousHistogram: number | null;
+  previousDpo: number | null;
   lastTickIdentity: string | null;
 };
 
 export type MarketSignal = {
   price: number;
-  macd: number;
-  signal: number;
+  dpo: number;
   bias: "bullish" | "bearish" | "neutral";
   ready: boolean;
   crossover: "CALL" | "PUT" | null;
@@ -36,18 +33,18 @@ type MarketConsoleProps = {
 const MAX_CONSOLE_ENTRIES = 100;
 const MARKET_SYMBOL = "R_100";
 const SCAN_INTERVAL = 20;
-const INDICATOR_WARMUP_TICKS = 100;
+const DPO_PERIOD = 14;
+const DPO_SHIFT = Math.floor(DPO_PERIOD / 2) + 1;
+const DPO_WARMUP_TICKS = DPO_PERIOD + DPO_SHIFT;
 
 export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const entriesRef = useRef<HTMLDivElement>(null);
   const nextIdRef = useRef(0);
   const indicatorRef = useRef<IndicatorState>({
-    fast: null,
-    slow: null,
-    signal: null,
+    prices: [],
     ticks: 0,
-    previousHistogram: null,
+    previousDpo: null,
     lastTickIdentity: null,
   });
 
@@ -70,17 +67,14 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         if (!active) return;
         if (status === "Reconnecting" || status === "Unavailable") {
           indicatorRef.current = {
-            fast: null,
-            slow: null,
-            signal: null,
+            prices: [],
             ticks: 0,
-            previousHistogram: null,
+            previousDpo: null,
             lastTickIdentity: null,
           };
           onMarketSignal?.({
             price: 0,
-            macd: 0,
-            signal: 0,
+            dpo: 0,
             bias: "neutral",
             ready: false,
             crossover: null,
@@ -109,20 +103,23 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
           : `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
-        state.fast = state.fast === null ? price : state.fast + (2 / 13) * (price - state.fast);
-        state.slow = state.slow === null ? price : state.slow + (2 / 27) * (price - state.slow);
-        const macd = state.fast - state.slow;
-        state.signal = state.signal === null ? macd : state.signal + (2 / 10) * (macd - state.signal);
         state.ticks += 1;
-        const ready = state.ticks >= INDICATOR_WARMUP_TICKS;
-        const histogram = macd - state.signal;
-        const crossover = ready && state.previousHistogram !== null && state.previousHistogram <= 0 && histogram > 0
+        state.prices.push(price);
+        if (state.prices.length > DPO_WARMUP_TICKS) state.prices.shift();
+        const ready = state.prices.length >= DPO_WARMUP_TICKS;
+        const dpoSmaEnd = state.prices.length - DPO_SHIFT;
+        const dpoSmaStart = dpoSmaEnd - DPO_PERIOD;
+        const dpoSma = ready
+          ? state.prices.slice(dpoSmaStart, dpoSmaEnd).reduce((sum, value) => sum + value, 0) / DPO_PERIOD
+          : null;
+        const dpo = dpoSma === null ? 0 : price - dpoSma;
+        const crossover = ready && state.previousDpo !== null && state.previousDpo <= 0 && dpo > 0
           ? "CALL"
-          : ready && state.previousHistogram !== null && state.previousHistogram >= 0 && histogram < 0
+          : ready && state.previousDpo !== null && state.previousDpo >= 0 && dpo < 0
             ? "PUT"
             : null;
-        state.previousHistogram = histogram;
-        const bias = histogram > 0 ? "bullish" : histogram < 0 ? "bearish" : "neutral";
+        if (ready) state.previousDpo = dpo;
+        const bias = dpo > 0 ? "bullish" : dpo < 0 ? "bearish" : "neutral";
 
         if (ready && state.ticks % SCAN_INTERVAL === 0) {
           appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
@@ -130,15 +127,14 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
 
         onMarketSignal?.({
           price,
-          macd,
-          signal: state.signal,
+          dpo,
           bias,
           ready,
           crossover,
         });
 
         if (ready && crossover) {
-          appendEntry(`Signal · ${crossover === "CALL" ? "BUY" : "SELL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
+          appendEntry(`Signal · ${crossover === "CALL" ? "RISE" : "FALL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
         }
       },
     );

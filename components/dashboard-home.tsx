@@ -117,6 +117,10 @@ function isTradeHistoryEntry(value: unknown): value is TradeHistoryEntry {
   );
 }
 
+function getTradeDirection(contractType: "CALL" | "PUT") {
+  return contractType === "CALL" ? "RISE" : "FALL";
+}
+
 export function DashboardHome({ email, accountId, username, socketOnline, onSignOut }: DashboardHomeProps) {
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
@@ -616,7 +620,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     setTradeInProgress(true);
     setTradeProgressTicks(0);
     setOpenTradeDetails(null);
-    setBotStatus(`${contractType === "CALL" ? "BUY" : "SELL"} · trade in progress`);
+    setBotStatus(`${getTradeDirection(contractType)} · trade in progress`);
     void (async () => {
       try {
       const accessToken = await getSupabaseAccessToken();
@@ -1167,7 +1171,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
                 <div className="bot-trade-values" aria-live="polite">
                   {openTradeDetails ? (
                     <>
-                      <span>{openTradeDetails.contractType === "CALL" ? "BUY" : "SELL"}</span>
+                      <span>{getTradeDirection(openTradeDetails.contractType)}</span>
                       <span>Stake {formatTradeAmount(openTradeDetails.stake, openTradeDetails.currency)}</span>
                       <span>Potential payout {formatTradeAmount(openTradeDetails.payout, openTradeDetails.currency)}</span>
                     </>
@@ -1254,7 +1258,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
                                 : <ArrowDownRight size={17} aria-hidden="true" />}
                             </span>
                             <span className="history-direction-label">
-                              {trade.contractType === "CALL" ? "BUY" : "SELL"}
+                              {getTradeDirection(trade.contractType)}
                             </span>
                           </td>
                           <td>{formatTradeAmount(trade.stake, trade.currency)}</td>
