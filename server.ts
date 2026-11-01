@@ -21,12 +21,9 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const derivAppId = (process.env.DERIV_APP_ID ?? process.env.NEXT_PUBLIC_DERIV_APP_ID)?.trim();
 const derivRedirectUri = process.env.DERIV_REDIRECT_URI?.trim();
 const subscriptionsEnabled = process.env.SUBSCRIPTIONS_ENABLED?.trim().toLowerCase() === "true";
-const nowPaymentsApiKey = process.env.NOWPAYMENTS_API_KEY?.trim();
-const nowPaymentsIpnSecret = process.env.NOWPAYMENTS_IPN_SECRET?.trim();
-const nowPaymentsIpnCallbackUrl = process.env.NOWPAYMENTS_IPN_CALLBACK_URL?.trim();
+const plisioApiKey = process.env.PLISIO_API_KEY?.trim();
 const SUBSCRIPTION_PRICE_USD = 5;
 const SUBSCRIPTION_DURATION_HOURS = 12;
-const SUBSCRIPTION_PAY_CURRENCY = "usdttrc20";
 const nextApp = next({ dev: development });
 const nextHandler = nextApp.getRequestHandler();
 const supabaseAuth =
@@ -83,29 +80,72 @@ async function authenticateSupabaseRequest(request: express.Request) {
   return error ? null : data.user;
 }
 
-function sortJsonKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJsonKeys);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, sortJsonKeys(nested)]),
-    );
-  }
-  return value;
-}
+function verifyPlisioCallback(body: Record<string, unknown>) {
+  const signature = body.verify_hash;
+  if (!plisioApiKey || typeof signature !== "string" || !/^[a-f\d]{40}$/i.test(signature)) return false;
 
-function verifyNowPaymentsSignature(body: unknown, signature: string) {
-  if (!nowPaymentsIpnSecret) return false;
-  const expected = createHmac("sha512", nowPaymentsIpnSecret)
-    .update(JSON.stringify(sortJsonKeys(body)))
-    .digest();
-  let actual: Buffer;
-  try {
-    actual = Buffer.from(signature, "hex");
-  } catch {
+  const entries = Object.entries(body)
+    .filter(([key]) => key !== "verify_hash")
+    .sort(([left], [right]) => left.localeCompare(right));
+  if (entries.some(([, value]) => value !== null && !["string", "number", "boolean"].includes(typeof value))) {
     return false;
   }
+  const signedData = entries.map(([, value]) => value === null ? "" : String(value)).join("|");
+  const expected = createHmac("sha1", plisioApiKey).update(signedData).digest();
+  const actual = Buffer.from(signature, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+type PlisioCurrency = {
+  id: string;
+  name: string;
+  network: string | null;
+};
+
+async function getPlisioCurrencies(): Promise<PlisioCurrency[]> {
+  if (!plisioApiKey) throw new Error("Payment gateway is not configured.");
+  const params = new URLSearchParams({ api_key: plisioApiKey });
+  const response = await fetch(`https://api.plisio.net/api/v1/currencies/USD?${params}`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok || !payload || typeof payload !== "object") {
+    throw new Error("Could not load supported payment currencies.");
+  }
+  const providerResult = payload as Record<string, unknown>;
+  if (providerResult.status !== "success") {
+    throw new Error("Could not load supported payment currencies.");
+  }
+  const responseData = providerResult.data;
+  const currencyCollection = responseData && typeof responseData === "object" && !Array.isArray(responseData)
+    ? ((responseData as Record<string, unknown>).currencies ?? responseData)
+    : responseData;
+  const currencies = Array.isArray(currencyCollection)
+    ? currencyCollection
+    : currencyCollection && typeof currencyCollection === "object"
+      ? Object.values(currencyCollection)
+      : [];
+  const normalized = currencies.flatMap((entry): PlisioCurrency[] => {
+    if (typeof entry === "string" && /^[A-Z0-9_]{2,20}$/.test(entry)) {
+      return [{ id: entry, name: entry.replaceAll("_", " "), network: null }];
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const currency = entry as Record<string, unknown>;
+    const id = currency.cid ?? currency.psys_cid ?? currency.id ?? currency.code;
+    if (typeof id !== "string" || !/^[A-Z0-9_]{2,20}$/.test(id)) return [];
+    if (currency.enabled === false || currency.is_enabled === false || currency.available === false) return [];
+    const nameValue = currency.name ?? currency.full_name ?? currency.title;
+    const networkValue = currency.network ?? currency.blockchain ?? currency.chain;
+    return [{
+      id,
+      name: typeof nameValue === "string" && nameValue.trim() ? nameValue.trim() : id.replaceAll("_", " "),
+      network: typeof networkValue === "string" && networkValue.trim() ? networkValue.trim() : null,
+    }];
+  });
+  const unique = [...new Map(normalized.map((currency) => [currency.id, currency])).values()];
+  if (unique.length === 0) throw new Error("No supported payment currencies were returned.");
+  return unique;
 }
 
 async function getSubscriptionExpiry(userId: string) {
@@ -423,103 +463,92 @@ async function startServer() {
   });
 
   app.post(
-    "/api/nowpayments/ipn",
+    "/api/plisio/callback",
     express.json({ limit: "32kb" }),
+    express.urlencoded({ extended: false, limit: "32kb" }),
     async (request, response) => {
       response.set("Cache-Control", "no-store");
-      if (!supabaseAdmin || !nowPaymentsIpnSecret) {
-        response.status(503).json({ error: "NOWPayments notifications are not configured." });
+      if (!supabaseAdmin || !plisioApiKey) {
+        response.status(503).json({ error: "Plisio notifications are not configured." });
         return;
       }
-      const signature = request.get("x-nowpayments-sig");
-      if (!signature || !verifyNowPaymentsSignature(request.body, signature)) {
-        response.status(401).json({ error: "Invalid payment notification signature." });
-        return;
-      }
-
       const body: unknown = request.body;
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         response.status(400).json({ error: "Invalid payment notification." });
         return;
       }
       const notification = body as Record<string, unknown>;
-      const paymentId = notification.payment_id;
-      const orderId = notification.order_id;
-      const paymentStatus = notification.payment_status;
-      if (
-        (typeof paymentId !== "string" && typeof paymentId !== "number") ||
-        typeof orderId !== "string" ||
-        typeof paymentStatus !== "string"
-      ) {
-        response.status(400).json({ error: "Payment notification is missing required fields." });
+      if (!verifyPlisioCallback(notification)) {
+        response.status(401).json({ error: "Invalid payment notification signature." });
         return;
       }
 
-      const normalizedPaymentId = String(paymentId);
+      const paymentId = notification.txn_id;
+      const orderId = notification.order_number;
+      const paymentStatus = notification.status;
+      if (typeof paymentId !== "string" || typeof orderId !== "string" || typeof paymentStatus !== "string") {
+        response.status(400).json({ error: "Payment notification is missing required fields." });
+        return;
+      }
+      if (!/^[a-z_]{1,40}$/i.test(paymentStatus)) {
+        response.status(400).json({ error: "Unknown payment status." });
+        return;
+      }
+
       const { data: existingPayment, error: paymentLookupError } = await supabaseAdmin
-        .from("nowpayments_payments")
-        .select("payment_id, order_id, pay_currency, price_amount, payment_status, actually_paid, payment_expires_at")
-        .eq("payment_id", normalizedPaymentId)
+        .from("plisio_payments")
+        .select("payment_id, order_id, price_amount, price_currency, payment_status, payment_amount, payment_currency")
+        .eq("payment_id", paymentId)
         .maybeSingle();
       if (paymentLookupError) {
-        console.error("Could not look up the NOWPayments payment notification.", paymentLookupError);
+        console.error("Could not look up the Plisio payment notification.", paymentLookupError);
         response.status(503).json({ error: "Could not verify the payment notification." });
         return;
       }
+      const sourceAmount = notification.source_amount;
+      const sourceCurrency = notification.source_currency;
       if (
         !existingPayment ||
         existingPayment.order_id !== orderId ||
-        (typeof notification.pay_currency === "string" &&
-          existingPayment.pay_currency.toLowerCase() !== notification.pay_currency.toLowerCase()) ||
-        (notification.price_amount !== undefined &&
-          Number(notification.price_amount) !== Number(existingPayment.price_amount))
+        (sourceAmount !== undefined &&
+          (!Number.isFinite(Number(sourceAmount)) || Number(sourceAmount) !== Number(existingPayment.price_amount))) ||
+        (typeof sourceCurrency === "string" &&
+          sourceCurrency.toUpperCase() !== existingPayment.price_currency.toUpperCase())
       ) {
         response.status(400).json({ error: "Payment notification does not match an app payment." });
         return;
       }
 
-      const allowedStatuses = new Set([
-        "waiting",
-        "confirming",
-        "confirmed",
-        "sending",
-        "partially_paid",
-        "finished",
-        "failed",
-        "refunded",
-        "expired",
-      ]);
-      if (!allowedStatuses.has(paymentStatus)) {
-        response.status(400).json({ error: "Unknown payment status." });
-        return;
-      }
-      const nextStatus = existingPayment.payment_status === "finished"
-        ? "finished"
-        : paymentStatus;
-      const actuallyPaid = Number(notification.actually_paid);
+      const nextStatus = existingPayment.payment_status === "completed"
+        ? "completed"
+        : paymentStatus.toLowerCase();
+      const amountValue = Number(notification.amount);
+      const currencyValue = notification.psys_cid ?? notification.currency;
       const { error: paymentUpdateError } = await supabaseAdmin
-        .from("nowpayments_payments")
+        .from("plisio_payments")
         .update({
           payment_status: nextStatus,
-          actually_paid: Number.isFinite(actuallyPaid) ? actuallyPaid : existingPayment.actually_paid,
-          ipn_data: notification,
-          payment_expires_at: typeof notification.expiration_estimate_date === "string"
-            ? notification.expiration_estimate_date
-            : existingPayment.payment_expires_at,
+          payment_amount: Number.isFinite(amountValue) && amountValue >= 0
+            ? amountValue
+            : existingPayment.payment_amount,
+          payment_currency: typeof currencyValue === "string"
+            ? currencyValue
+            : existingPayment.payment_currency,
+          callback_data: notification,
           updated_at: new Date().toISOString(),
         })
-        .eq("payment_id", normalizedPaymentId)
+        .eq("payment_id", paymentId)
         .eq("order_id", orderId);
       if (paymentUpdateError) {
-        console.error("Could not update the NOWPayments payment status.", paymentUpdateError);
+        console.error("Could not update the Plisio payment status.", paymentUpdateError);
         response.status(503).json({ error: "Could not save the payment status." });
         return;
       }
 
-      if (nextStatus === "finished") {
+      if (nextStatus === "completed") {
         const { error: activationError } = await supabaseAdmin.rpc(
-          "activate_gsync_subscription_from_payment",
-          { p_payment_id: normalizedPaymentId },
+          "activate_gsync_subscription_from_plisio_payment",
+          { p_payment_id: paymentId },
         );
         if (activationError) {
           console.error("Could not activate a paid bot subscription.", activationError);
@@ -531,7 +560,26 @@ async function startServer() {
     },
   );
 
-  app.post("/api/subscription/payments", async (request, response) => {
+  app.get("/api/subscription/currencies", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!subscriptionsEnabled || !plisioApiKey) {
+      response.status(404).json({ error: "Subscription payments are unavailable." });
+      return;
+    }
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in before choosing a payment currency." });
+      return;
+    }
+    try {
+      response.json({ currencies: await getPlisioCurrencies() });
+    } catch (error) {
+      console.error("Could not load supported payment currencies.", error);
+      response.status(503).json({ error: "Could not load payment options. Please try again." });
+    }
+  });
+
+  app.post("/api/subscription/payments", express.json({ limit: "4kb" }), async (request, response) => {
     response.set("Cache-Control", "no-store");
     if (!subscriptionsEnabled) {
       response.status(404).json({ error: "Subscriptions are currently disabled." });
@@ -542,7 +590,7 @@ async function startServer() {
       response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in before purchasing a subscription." });
       return;
     }
-    if (!supabaseAdmin || !nowPaymentsApiKey || !nowPaymentsIpnSecret || !nowPaymentsIpnCallbackUrl) {
+    if (!supabaseAdmin || !plisioApiKey) {
       response.status(503).json({ error: "In-app subscription payments are not fully configured." });
       return;
     }
@@ -552,113 +600,117 @@ async function startServer() {
       return;
     }
 
-    let callbackUrl: URL;
-    try {
-      callbackUrl = new URL(nowPaymentsIpnCallbackUrl);
-    } catch {
-      response.status(503).json({ error: "NOWPAYMENTS_IPN_CALLBACK_URL is invalid." });
+    const requestedCurrency = request.body?.currency;
+    if (typeof requestedCurrency !== "string" || !/^[A-Z0-9_]{2,20}$/.test(requestedCurrency)) {
+      response.status(400).json({ error: "Choose a supported payment currency." });
       return;
     }
-    if (
-      callbackUrl.pathname !== "/api/nowpayments/ipn" ||
-      callbackUrl.search ||
-      callbackUrl.hash ||
-      (process.env.NODE_ENV === "production" && callbackUrl.protocol !== "https:")
-    ) {
-      response.status(503).json({ error: "Configure the exact HTTPS NOWPayments notification URL." });
+    let supportedCurrencies: PlisioCurrency[];
+    try {
+      supportedCurrencies = await getPlisioCurrencies();
+    } catch (error) {
+      console.error("Could not validate the requested payment currency.", error);
+      response.status(503).json({ error: "Could not validate the selected payment option." });
+      return;
+    }
+    const currency = supportedCurrencies.find((option) => option.id === requestedCurrency);
+    if (!currency) {
+      response.status(400).json({ error: "Choose a supported payment currency." });
       return;
     }
 
-    const orderId = `gs-${randomBytes(16).toString("hex")}`;
-    const metadata = user.user_metadata ?? {};
-    const customerName = [
-      metadata.full_name,
-      metadata.name,
-      metadata.username,
-      user.email?.split("@")[0],
-    ].find((value): value is string => typeof value === "string" && value.trim().length > 0)
-      ?.trim()
-      .replace(/[\r\n]+/g, " ")
-      .slice(0, 80) ?? "User";
-    const customerEmail = user.email ?? "";
-    if (!customerEmail) {
-      response.status(400).json({ error: "Add an email address to your account before purchasing a subscription." });
+    const host = request.get("host");
+    if (!host || (process.env.NODE_ENV === "production" && request.protocol !== "https")) {
+      response.status(503).json({ error: "A secure public app URL is required to start payment." });
       return;
     }
+    const appOrigin = `${request.protocol}://${host}`;
+    const orderId = `gs-${randomBytes(16).toString("hex")}`;
+    const callbackUrl = new URL("/api/plisio/callback", appOrigin).toString();
+    const successUrl = new URL(`/payment/success?order_id=${encodeURIComponent(orderId)}`, appOrigin).toString();
+    const failedUrl = new URL(`/payment/failed?order_id=${encodeURIComponent(orderId)}`, appOrigin).toString();
+    const customerEmail = user.email ?? "";
+    const invoiceParams = new URLSearchParams({
+      api_key: plisioApiKey,
+      source_currency: "USD",
+      source_amount: String(SUBSCRIPTION_PRICE_USD),
+      currency: currency.id,
+      allowed_psys_cids: currency.id,
+      order_number: orderId,
+      order_name: "G-Sync bot subscription",
+      description: `G-Sync ${SUBSCRIPTION_DURATION_HOURS}-hour bot subscription`,
+      callback_url: callbackUrl,
+      success_invoice_url: successUrl,
+      fail_invoice_url: failedUrl,
+      ...(customerEmail ? { email: customerEmail } : {}),
+    });
+
     let providerResponse: Response;
     try {
-      providerResponse = await fetch("https://api.nowpayments.io/v1/payment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": nowPaymentsApiKey,
-        },
-        body: JSON.stringify({
-          price_amount: SUBSCRIPTION_PRICE_USD,
-          price_currency: "usd",
-          pay_currency: SUBSCRIPTION_PAY_CURRENCY,
-          ipn_callback_url: callbackUrl.toString(),
-          order_id: orderId,
-          order_description: `G-Sync 12-hour bot subscription for ${customerName}`,
-          customer_email: customerEmail,
-        }),
+      providerResponse = await fetch(`https://api.plisio.net/api/v1/invoices/new?${invoiceParams}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
-      console.error("Could not create an in-app NOWPayments payment.", error);
+      console.error("Could not create an in-app Plisio invoice.", error);
       response.status(503).json({ error: "Could not start payment. Please try again." });
       return;
     }
     const providerPayload: unknown = await providerResponse.json().catch(() => null);
     if (!providerResponse.ok || !providerPayload || typeof providerPayload !== "object") {
-      console.error("NOWPayments rejected an in-app payment request.", { status: providerResponse.status });
-      response.status(502).json({ error: "NOWPayments could not create the payment. Please try again." });
+      console.error("Plisio rejected an in-app invoice request.", { status: providerResponse.status });
+      response.status(502).json({ error: "Could not create secure payment instructions. Please try again." });
       return;
     }
-    const paymentData = providerPayload as Record<string, unknown>;
-    const paymentIdValue = paymentData.payment_id;
-    const payAddress = paymentData.pay_address;
-    const payAmount = Number(paymentData.pay_amount);
+    const payload = providerPayload as Record<string, unknown>;
+    const paymentData = payload.data;
+    if (payload.status !== "success" || !paymentData || typeof paymentData !== "object") {
+      console.error("Plisio returned an unsuccessful invoice response.", { status: providerResponse.status });
+      response.status(502).json({ error: "Could not create secure payment instructions. Please try again." });
+      return;
+    }
+    const invoice = paymentData as Record<string, unknown>;
+    const paymentId = invoice.txn_id;
+    const paymentAddress = invoice.wallet_hash ?? invoice.payment_address;
+    const amountValue = Number(invoice.amount ?? invoice.invoice_total_sum);
+    const paymentCurrency = invoice.psys_cid ?? invoice.currency;
+    const qrCode = invoice.qr_code;
     if (
-      (typeof paymentIdValue !== "string" && typeof paymentIdValue !== "number") ||
-      typeof payAddress !== "string" ||
-      !payAddress ||
-      !Number.isFinite(payAmount) ||
-      payAmount <= 0 ||
-      typeof paymentData.pay_currency !== "string"
+      typeof paymentId !== "string" ||
+      !paymentId ||
+      typeof paymentAddress !== "string" ||
+      paymentAddress.length === 0 ||
+      !Number.isFinite(amountValue) ||
+      amountValue <= 0 ||
+      typeof paymentCurrency !== "string" ||
+      paymentCurrency.toUpperCase() !== currency.id
     ) {
-      console.error("NOWPayments returned incomplete in-app payment instructions.");
-      response.status(502).json({ error: "NOWPayments returned invalid payment instructions." });
+      console.error("Plisio returned incomplete invoice instructions.");
+      response.status(503).json({ error: "In-app payment is unavailable for this account. Contact support." });
       return;
     }
 
-    const paymentId = String(paymentIdValue);
     const createdAt = new Date().toISOString();
-    const initialStatus = typeof paymentData.payment_status === "string"
-      ? paymentData.payment_status
-      : "waiting";
     const { error: insertError } = await supabaseAdmin
-      .from("nowpayments_payments")
+      .from("plisio_payments")
       .insert({
         payment_id: paymentId,
         user_id: user.id,
         order_id: orderId,
         customer_email: customerEmail || null,
-        customer_name: customerName,
         price_amount: SUBSCRIPTION_PRICE_USD,
-        price_currency: "usd",
-        pay_currency: paymentData.pay_currency,
-        pay_amount: payAmount,
-        pay_address: payAddress,
-        payment_status: initialStatus,
-        payment_expires_at: typeof paymentData.expiration_estimate_date === "string"
-          ? paymentData.expiration_estimate_date
-          : null,
+        price_currency: "USD",
+        payment_amount: amountValue,
+        payment_currency: paymentCurrency,
+        payment_address: paymentAddress,
+        qr_code: typeof qrCode === "string" && /^data:image\/(?:png|jpeg);base64,/.test(qrCode) ? qrCode : null,
+        payment_status: typeof invoice.status === "string" ? invoice.status : "new",
         created_at: createdAt,
         updated_at: createdAt,
       });
     if (insertError) {
-      console.error("Could not save the NOWPayments payment.", insertError);
+      console.error("Could not save the Plisio payment.", insertError);
       response.status(503).json({ error: "Could not save payment status. Please contact support before paying." });
       return;
     }
@@ -666,15 +718,13 @@ async function startServer() {
     response.status(201).json({
       paymentId,
       orderId,
-      payAddress,
-      payAmount,
-      payCurrency: paymentData.pay_currency,
       priceAmount: SUBSCRIPTION_PRICE_USD,
       priceCurrency: "USD",
-      expiresAt: typeof paymentData.expiration_estimate_date === "string"
-        ? paymentData.expiration_estimate_date
-        : null,
-      status: initialStatus,
+      payAmount: amountValue,
+      payCurrency: paymentCurrency,
+      payAddress: paymentAddress,
+      qrCode: typeof qrCode === "string" && /^data:image\/(?:png|jpeg);base64,/.test(qrCode) ? qrCode : null,
+      status: typeof invoice.status === "string" ? invoice.status : "new",
     });
   });
 
@@ -691,8 +741,8 @@ async function startServer() {
     }
 
     const { data: payments, error } = await supabaseAdmin
-      .from("nowpayments_payments")
-      .select("payment_id, price_amount, price_currency, pay_amount, pay_currency, actually_paid, payment_status, payment_expires_at, created_at, updated_at, activated_at")
+      .from("plisio_payments")
+      .select("payment_id, price_amount, price_currency, payment_amount, payment_currency, payment_status, created_at, updated_at, activated_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(50);
@@ -706,15 +756,58 @@ async function startServer() {
         paymentId: payment.payment_id,
         priceAmount: Number(payment.price_amount),
         priceCurrency: payment.price_currency,
-        payAmount: Number(payment.pay_amount),
-        payCurrency: payment.pay_currency,
-        actuallyPaid: payment.actually_paid === null ? null : Number(payment.actually_paid),
+        payAmount: Number(payment.payment_amount),
+        payCurrency: payment.payment_currency,
         status: payment.payment_status,
-        expiresAt: payment.payment_expires_at,
         createdAt: payment.created_at,
         updatedAt: payment.updated_at,
         activatedAt: payment.activated_at,
       })),
+    });
+  });
+
+  app.get("/api/subscription/payments/order/:orderId", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    if (!subscriptionsEnabled || !supabaseAdmin) {
+      response.status(404).json({ error: "Subscription payments are unavailable." });
+      return;
+    }
+    const user = await authenticateSupabaseRequest(request);
+    if (!user) {
+      response.status(supabaseAuth ? 401 : 503).json({ error: "Sign in to check payment status." });
+      return;
+    }
+    const orderId = request.params.orderId;
+    if (!/^gs-[a-f\d]{32}$/i.test(orderId)) {
+      response.status(400).json({ error: "Invalid payment order." });
+      return;
+    }
+    const [{ data: payment, error: paymentError }, subscription] = await Promise.all([
+      supabaseAdmin
+        .from("plisio_payments")
+        .select("payment_id, order_id, payment_address, qr_code, payment_amount, payment_currency, payment_status")
+        .eq("order_id", orderId)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      getSubscriptionExpiry(user.id),
+    ]);
+    if (paymentError || subscription.error) {
+      response.status(503).json({ error: "Could not check the payment status." });
+      return;
+    }
+    if (!payment) {
+      response.status(404).json({ error: "Payment not found." });
+      return;
+    }
+    response.json({
+      paymentId: payment.payment_id,
+      orderId: payment.order_id,
+      payAddress: payment.payment_address,
+      qrCode: payment.qr_code,
+      payAmount: Number(payment.payment_amount),
+      payCurrency: payment.payment_currency,
+      status: payment.payment_status,
+      subscriptionExpiresAt: subscription.expiresAt,
     });
   });
 
@@ -736,8 +829,8 @@ async function startServer() {
     }
     const [{ data: payment, error: paymentError }, subscription] = await Promise.all([
       supabaseAdmin
-        .from("nowpayments_payments")
-        .select("payment_id, order_id, pay_address, pay_amount, pay_currency, payment_status, payment_expires_at")
+        .from("plisio_payments")
+        .select("payment_id, order_id, payment_address, qr_code, payment_amount, payment_currency, payment_status")
         .eq("payment_id", paymentId)
         .eq("user_id", user.id)
         .maybeSingle(),
@@ -754,11 +847,11 @@ async function startServer() {
     response.json({
       paymentId: payment.payment_id,
       orderId: payment.order_id,
-      payAddress: payment.pay_address,
-      payAmount: Number(payment.pay_amount),
-      payCurrency: payment.pay_currency,
+      payAddress: payment.payment_address,
+      qrCode: payment.qr_code,
+      payAmount: Number(payment.payment_amount),
+      payCurrency: payment.payment_currency,
       status: payment.payment_status,
-      expiresAt: payment.payment_expires_at,
       subscriptionExpiresAt: subscription.expiresAt,
     });
   });

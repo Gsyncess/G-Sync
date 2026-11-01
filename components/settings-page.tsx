@@ -4,9 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   BadgeCheck,
-  Check,
   Clock3,
-  Copy,
   CreditCard,
   Fingerprint,
   Mail,
@@ -26,21 +24,25 @@ export type SubscriptionPayment = {
   payAddress: string;
   payAmount: number;
   payCurrency: string;
+  qrCode: string | null;
   priceAmount: number;
   priceCurrency: string;
-  expiresAt: string | null;
   status: string;
+};
+
+export type PaymentCurrency = {
+  id: string;
+  name: string;
+  network: string | null;
 };
 
 export type SubscriptionPaymentRecord = {
   paymentId: string;
   priceAmount: number;
   priceCurrency: string;
-  payAmount: number;
-  payCurrency: string;
-  actuallyPaid: number | null;
+  payAmount: number | null;
+  payCurrency: string | null;
   status: string;
-  expiresAt: string | null;
   createdAt: string;
   activatedAt: string | null;
 };
@@ -53,13 +55,15 @@ type SettingsPageProps = {
   subscription: AppSubscription | null;
   subscriptionLoading: boolean;
   subscriptionError: string;
-  payment: SubscriptionPayment | null;
   checkoutOpen: boolean;
   paymentHistory: SubscriptionPaymentRecord[];
   paymentHistoryLoading: boolean;
   paymentHistoryError: string;
+  paymentCurrencies: PaymentCurrency[];
+  paymentCurrenciesLoading: boolean;
   paymentBusy: boolean;
-  onSubscribe: () => void;
+  onStartCheckout: () => void;
+  onSubscribe: (currency: string) => void;
   onBackFromCheckout: () => void;
 };
 
@@ -82,15 +86,14 @@ function formatExpiry(value: string | null) {
 
 function formatPaymentStatus(status: string) {
   const labels: Record<string, string> = {
+    new: "Waiting for payment",
+    pending: "Waiting for payment",
     waiting: "Waiting for payment",
-    confirming: "Confirming payment",
-    confirmed: "Payment confirmed",
-    sending: "Payment processing",
-    partially_paid: "Payment incomplete",
-    finished: "Payment complete",
-    failed: "Payment failed",
-    refunded: "Payment refunded",
+    completed: "Payment complete",
+    error: "Payment failed",
+    cancelled: "Payment cancelled",
     expired: "Payment expired",
+    mismatch: "Payment mismatch",
   };
   return labels[status] ?? "Checking payment";
 }
@@ -112,17 +115,18 @@ export function SettingsPage({
   subscription,
   subscriptionLoading,
   subscriptionError,
-  payment,
   checkoutOpen,
   paymentHistory,
   paymentHistoryLoading,
   paymentHistoryError,
+  paymentCurrencies,
+  paymentCurrenciesLoading,
   paymentBusy,
+  onStartCheckout,
   onSubscribe,
   onBackFromCheckout,
 }: SettingsPageProps) {
-  const [copied, setCopied] = useState(false);
-  const [copyError, setCopyError] = useState("");
+  const [selectedCurrency, setSelectedCurrency] = useState("");
   const avatar = avatarColors[
     Array.from(accountId).reduce((sum, character) => sum + character.charCodeAt(0), 0) % avatarColors.length
   ];
@@ -135,22 +139,10 @@ export function SettingsPage({
     .join("") || email.slice(0, 1).toUpperCase() || "U";
 
   useEffect(() => {
-    setCopyError("");
-    setCopied(false);
-  }, [payment?.paymentId]);
-
-  const copyAddress = async () => {
-    if (!payment) return;
-    try {
-      await navigator.clipboard.writeText(payment.payAddress);
-      setCopyError("");
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch (error) {
-      console.error("Could not copy subscription payment address.", error);
-      setCopyError("Could not copy the address. Select and copy it manually.");
+    if (!paymentCurrencies.some((currency) => currency.id === selectedCurrency)) {
+      setSelectedCurrency(paymentCurrencies[0]?.id ?? "");
     }
-  };
+  }, [paymentCurrencies, selectedCurrency]);
 
   if (checkoutOpen) {
     return (
@@ -167,66 +159,49 @@ export function SettingsPage({
         <div className="checkout-content">
           <div className="checkout-icon"><CreditCard size={22} aria-hidden="true" /></div>
           <p className="checkout-eyebrow">BOT SUBSCRIPTION</p>
-          <h1>Complete your payment</h1>
-          <p className="checkout-subtitle">Your bot access starts automatically after NOWPayments confirms your payment.</p>
+          <h1>Choose a payment currency</h1>
+          <p className="checkout-subtitle">Select a supported currency. Payment details and confirmation stay in this app.</p>
           <div className="checkout-order-card">
             <div className="checkout-order-price">
               <span>Subscription</span>
               <strong>$5.00 USD</strong>
             </div>
             <div className="checkout-order-duration">12 hours of bot access</div>
-            {payment?.orderId && (
-              <div className="checkout-order-id">
-                <span>Order ID</span>
-                <code>{payment.orderId}</code>
-              </div>
-            )}
           </div>
           {subscriptionError && <p className="settings-error" role="alert">{subscriptionError}</p>}
-          {paymentBusy && !payment ? (
+          {paymentCurrenciesLoading ? (
             <div className="checkout-loading" role="status">
               <span className="checkout-spinner" />
-              <span>Preparing your secure payment…</span>
+              <span>Loading available payment options…</span>
             </div>
-          ) : payment ? (
-            <div className="checkout-payment-details" aria-live="polite">
-              <div className={`payment-status payment-status-${payment.status}`}>
-                <span className="status-dot" />
-                {formatPaymentStatus(payment.status)}
-              </div>
-              {payment.status === "finished" ? (
-                <div className="checkout-payment-complete" role="status">
-                  <BadgeCheck size={24} aria-hidden="true" />
-                  <strong>Payment confirmed</strong>
-                  <span>Your subscription is active. You can return to Settings.</span>
-                </div>
-              ) : ["failed", "refunded", "expired"].includes(payment.status) ? (
-                <p className="checkout-payment-note">
-                  This payment is {payment.status}. Return to Settings to start a new payment.
-                </p>
-              ) : (
-                <>
-                  <div className="checkout-crypto-amount">
-                    <span>Send exactly</span>
-                    <strong>{payment.payAmount} {payment.payCurrency.toUpperCase()}</strong>
-                  </div>
-                  <div className="payment-network">Network: TRON (TRC20)</div>
-                  <span className="payment-address-label">Payment address</span>
-                  <code className="payment-address">{payment.payAddress}</code>
-                  <button type="button" className="payment-copy-button" onClick={() => void copyAddress()}>
-                    {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
-                    {copied ? "Address copied" : "Copy address"}
-                  </button>
-                  {copyError && <p className="settings-error" role="alert">{copyError}</p>}
-                  <p className="payment-safety-note">
-                    Pay from your wallet using USDT on the TRC20 network. No amount entry or NOWPayments website is needed.
-                  </p>
-                </>
-              )}
-            </div>
+          ) : paymentCurrencies.length > 0 ? (
+            <>
+              <label className="payment-currency-field">
+                <span>Currency and network</span>
+                <select
+                  value={selectedCurrency}
+                  onChange={(event) => setSelectedCurrency(event.target.value)}
+                  disabled={paymentBusy}
+                >
+                  {paymentCurrencies.map((currency) => (
+                    <option key={currency.id} value={currency.id}>
+                      {currency.name}{currency.network ? ` · ${currency.network}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="subscription-start-button"
+                disabled={!selectedCurrency || paymentBusy}
+                onClick={() => onSubscribe(selectedCurrency)}
+              >
+                {paymentBusy ? "Preparing secure payment…" : "Continue"}
+              </button>
+            </>
           ) : (
-            <button type="button" className="subscription-start-button checkout-retry-button" onClick={onSubscribe}>
-              Try payment again
+            <button type="button" className="subscription-start-button checkout-retry-button" onClick={onStartCheckout}>
+              Try loading payment options again
             </button>
           )}
           <p className="checkout-account-note">
@@ -331,16 +306,16 @@ export function SettingsPage({
             <span>/ 12 hours</span>
           </div>
           <p className="subscription-payment-description">
-            Pay exactly the amount shown in USDT on the TRC20 network. Payment instructions stay in this app.
+            Pay $5 USD using a supported crypto currency and network. Payment instructions appear securely in this app.
           </p>
           {subscriptionError && <p className="settings-error" role="alert">{subscriptionError}</p>}
           <button
             type="button"
             className="subscription-start-button"
             disabled={paymentBusy || subscriptionLoading}
-            onClick={onSubscribe}
+            onClick={onStartCheckout}
           >
-            {paymentBusy ? "Preparing in-app payment…" : "Subscribe for $5"}
+            {paymentBusy ? "Preparing secure payment…" : "Subscribe for $5"}
           </button>
         </article>
       )}
@@ -365,13 +340,19 @@ export function SettingsPage({
               {paymentHistory.map((record) => (
                 <li className="payment-history-item" key={record.paymentId}>
                   <div className="payment-history-main">
-                    <span className={`subscription-badge ${record.status === "finished" ? "subscription-badge-active" : "subscription-badge-expired"}`}>
+                    <span className={`subscription-badge ${
+                      record.status === "completed"
+                        ? "subscription-badge-active"
+                        : ["error", "cancelled", "expired", "mismatch"].includes(record.status)
+                          ? "subscription-badge-expired"
+                          : ""
+                    }`}>
                       {formatPaymentStatus(record.status)}
                     </span>
                     <strong>
-                      {record.actuallyPaid !== null
-                        ? `${record.actuallyPaid} ${record.payCurrency.toUpperCase()}`
-                        : `${record.payAmount} ${record.payCurrency.toUpperCase()}`}
+                      {record.payAmount !== null && record.payCurrency
+                        ? `${record.payAmount} ${record.payCurrency.toUpperCase()}`
+                        : `$${record.priceAmount.toFixed(2)} ${record.priceCurrency}`}
                     </strong>
                   </div>
                   <span className="payment-history-date">{formatPaymentDate(record.createdAt)}</span>

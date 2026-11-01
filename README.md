@@ -22,15 +22,13 @@ Copy `.env.example` to `.env.local` for local development. Set the same values i
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key used by the sign-in client and server-side token verification. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Paid mode | Server-only Supabase service-role key. Required to persist profiles and payments and manage subscription entitlements. Never expose this key in browser code or a `NEXT_PUBLIC_` variable. |
 | `SUBSCRIPTIONS_ENABLED` | No | `false` (default) allows free bot access. Set to `true` to require an active subscription and enable checkout. |
-| `NOWPAYMENTS_API_KEY` | Paid mode | Server-only API key from the NOWPayments account. |
-| `NOWPAYMENTS_IPN_SECRET` | Paid mode | Server-only IPN secret configured in NOWPayments; used to verify payment notifications. |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | Paid mode | Public HTTPS URL of this app ending exactly in `/api/nowpayments/ipn`. |
+| `PLISIO_API_KEY` | Paid mode | Server-only Plisio Secret Key. Used to create invoices and verify Plisio callbacks. |
 | `DERIV_APP_ID` | For Deriv account linking | Deriv application ID used for OAuth and live balance subscriptions. |
 | `DERIV_REDIRECT_URI` | For Deriv account linking | Exact public callback URL registered in Deriv: `https://YOUR_HOST/api/deriv/oauth/callback`. |
 | `CAPACITOR_SERVER_URL` | Android wrapper | Public HTTPS URL loaded by the Capacitor Android app. |
 | `PORT` | Hosting platform | HTTP port. Usually provided by the host; defaults to `3000` locally. |
 
-Supabase URL and anon key are required for authentication. The payment and subscription variables are only needed when paid mode is enabled. Keep all service-role and NOWPayments secrets server-side. Do not commit `.env.local` or production credentials.
+Supabase URL and anon key are required for authentication. The payment and subscription variables are only needed when paid mode is enabled. Keep all service-role and Plisio secrets server-side. Do not commit `.env.local` or production credentials.
 
 ## Supabase setup and automatic migrations
 
@@ -41,25 +39,24 @@ Supabase URL and anon key are required for authentication. The payment and subsc
 
 Database changes are versioned in [supabase/migrations/](supabase/migrations). When a migration is pushed to `main`, the GitHub Actions workflow applies pending migrations to the linked Supabase project automatically. You can also start the workflow from GitHub Actions with **Run workflow**. Do not edit the live database manually or re-run old SQL; add a new timestamped migration for each schema change. The initial migration is safe to apply to an existing installation of the previous schema.
 
-The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Signup collects the user's first name and saves it to Supabase Auth metadata and their profile for display. Each profile receives a unique `G-` account ID, for example `G-6839387474588`, generated and stored by Supabase for new and existing users. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
+The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and Plisio invoice/status data in `plisio_payments`. The migration preserves pre-existing payment records in `legacy_subscription_payments` and uses Plisio for new orders. Signup collects the user's first name and saves it to Supabase Auth metadata and their profile for display. Each profile receives a unique `G-` account ID, for example `G-6839387474588`, generated and stored by Supabase for new and existing users. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
 
 ## Bot subscriptions and in-app payments
 
 ### Free bot access
 
-Set `SUBSCRIPTIONS_ENABLED=false` (or leave it unset) to allow bot access without checkout. No NOWPayments credentials are needed in this mode.
+Set `SUBSCRIPTIONS_ENABLED=false` (or leave it unset) to allow bot access without checkout. No Plisio credentials are needed in this mode.
 
 ### Paid bot access
 
-1. Create/configure a NOWPayments account and enable USDT on the TRC20 network.
-2. Copy the NOWPayments API key and configure an IPN secret in NOWPayments. Set them as `NOWPAYMENTS_API_KEY` and `NOWPAYMENTS_IPN_SECRET` in the server environment.
-3. Set `NOWPAYMENTS_IPN_CALLBACK_URL` to your public HTTPS app URL plus `/api/nowpayments/ipn`, for example `https://your-app.example.com/api/nowpayments/ipn`. Configure the matching callback/notification URL in NOWPayments if its account settings require one. The endpoint must be publicly reachable by NOWPayments.
-4. Ensure the automatic Supabase migration workflow is configured and set `SUPABASE_SERVICE_ROLE_KEY` on the server.
-5. Set `SUBSCRIPTIONS_ENABLED=true` only after all of the above is configured, then deploy/restart the app.
+1. Create/configure a Plisio account, enable the cryptocurrencies and networks you want customers to use, and enable its White Label/custom API feature for in-app payment instructions.
+2. Copy the Plisio Secret Key into the server environment as `PLISIO_API_KEY`.
+3. Ensure the automatic Supabase migration workflow is configured and set `SUPABASE_SERVICE_ROLE_KEY` on the server.
+4. Set `SUBSCRIPTIONS_ENABLED=true` only after all of the above is configured, then deploy/restart the app.
 
-Each subscription is fixed at **$5 USD for 12 hours** and paid as USDT TRC20. Settings opens an in-app payment screen showing the amount and address returned by NOWPayments; it does not redirect to NOWPayments' hosted checkout. The server attaches the authenticated user's name, email, and a generated order ID to the payment request, then records the transaction in Supabase. Users must send the exact displayed USDT amount themselves from their wallet; the app does not withdraw funds from the wallet. Subscription access is granted only after the backend verifies the NOWPayments IPN signature and receives a `finished` payment status. The Supabase activation function is idempotent and extends an existing subscription.
+Each subscription costs **$5 USD for 12 hours**. The app loads currencies enabled for your account, creates a fixed-currency invoice, and displays the exact amount, address, and QR code in its own payment screens. Customers do not leave the app for a hosted checkout. The app displays an awaiting-payment status page with hidden success/failure return pages; the server verifies signed callbacks before updating payment status and automatically activating or extending the subscription. Browser redirects never grant access. The White Label/custom API feature is required because the regular invoice response only includes a hosted invoice URL.
 
-Test the complete checkout and signed IPN flow with NOWPayments test/sandbox credentials before taking real payments. Without valid credentials, a reachable HTTPS callback, and the migrations applied to the target Supabase project, live payment activation cannot work.
+Apply the Supabase migration before enabling subscriptions, then test invoice creation, the signed callback at `/api/plisio/callback`, and the return pages at `/payment/status`, `/payment/success`, and `/payment/failed`. The app derives its HTTPS callback and return URLs from the active public request host; no separate callback URL or Plisio IPN secret is required.
 
 ## Realtime and security
 
@@ -88,7 +85,7 @@ heroku config:set \
   DERIV_REDIRECT_URI="https://YOUR_APP.herokuapp.com/api/deriv/oauth/callback"
 ```
 
-For paid subscriptions, also configure `SUPABASE_SERVICE_ROLE_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `NOWPAYMENTS_IPN_CALLBACK_URL`, and `SUBSCRIPTIONS_ENABLED=true`. Keep the flag false until the database schema and payment callback have been tested. The app runs from the custom Node server on `PORT`.
+For paid subscriptions, also configure `SUPABASE_SERVICE_ROLE_KEY`, `PLISIO_API_KEY`, and `SUBSCRIPTIONS_ENABLED=true`. Keep the flag false until the database schema and payment callback have been tested. The app runs from the custom Node server on `PORT`.
 
 ## Android app with Capacitor
 

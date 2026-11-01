@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   ArrowDownRight,
@@ -20,6 +21,7 @@ import { RobotLogo } from "@/components/robot-logo";
 import {
   SettingsPage,
   type AppSubscription,
+  type PaymentCurrency,
   type SubscriptionPayment,
   type SubscriptionPaymentRecord,
 } from "@/components/settings-page";
@@ -127,6 +129,7 @@ function getInsufficientBalanceMessage(account: DerivAccount, stake: number) {
 }
 
 export function DashboardHome({ email, accountId, username, socketOnline, onSignOut }: DashboardHomeProps) {
+  const router = useRouter();
   const [derivAccounts, setDerivAccounts] = useState<DerivAccount[]>([]);
   const [derivConnected, setDerivConnected] = useState(false);
   const [derivBusy, setDerivBusy] = useState(true);
@@ -153,6 +156,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const [paymentHistory, setPaymentHistory] = useState<SubscriptionPaymentRecord[]>([]);
   const [paymentHistoryLoading, setPaymentHistoryLoading] = useState(true);
   const [paymentHistoryError, setPaymentHistoryError] = useState("");
+  const [paymentCurrencies, setPaymentCurrencies] = useState<PaymentCurrency[]>([]);
+  const [paymentCurrenciesLoading, setPaymentCurrenciesLoading] = useState(false);
   const [tradeHistory, setTradeHistory] = useState<TradeHistoryEntry[]>([]);
   const [historyReady, setHistoryReady] = useState(false);
   const [historyAccountId, setHistoryAccountId] = useState("");
@@ -281,7 +286,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       const accessToken = await getSupabaseAccessToken();
       const response = await fetch("/api/account", {
         cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
       });
       const result = await response.json() as {
         subscription?: AppSubscription;
@@ -315,7 +323,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
 
   useEffect(() => {
     const paymentId = subscriptionPayment?.paymentId;
-    if (!paymentId || ["finished", "failed", "refunded", "expired"].includes(subscriptionPayment.status)) return;
+    if (!paymentId || ["completed", "error", "cancelled", "expired", "mismatch"].includes(subscriptionPayment.status)) return;
     let active = true;
     const refreshPayment = async () => {
       try {
@@ -326,7 +334,6 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         });
         const result = await response.json() as {
           status?: unknown;
-          expiresAt?: unknown;
           subscriptionExpiresAt?: unknown;
           error?: unknown;
         };
@@ -338,7 +345,6 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           ? {
               ...current,
               status: result.status as string,
-              expiresAt: typeof result.expiresAt === "string" ? result.expiresAt : current.expiresAt,
             }
           : current);
         if (typeof result.subscriptionExpiresAt === "string") {
@@ -348,7 +354,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             expiresAt: result.subscriptionExpiresAt,
           });
         }
-        if (result.status === "finished") void refreshPaymentHistory();
+        if (result.status === "completed") void refreshPaymentHistory();
         setSubscriptionError("");
       } catch (error) {
         if (active) {
@@ -364,9 +370,31 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     };
   }, [refreshPaymentHistory, subscriptionPayment?.paymentId, subscriptionPayment?.status]);
 
-  const handleSubscribe = async () => {
+  const handleStartCheckout = async () => {
     setCheckoutOpen(true);
     setSubscriptionPayment(null);
+    setPaymentCurrencies([]);
+    setPaymentCurrenciesLoading(true);
+    setSubscriptionError("");
+    try {
+      const accessToken = await getSupabaseAccessToken();
+      const response = await fetch("/api/subscription/currencies", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const result = await response.json() as { currencies?: PaymentCurrency[]; error?: unknown };
+      if (!response.ok || !Array.isArray(result.currencies) || result.currencies.length === 0) {
+        throw new Error(typeof result.error === "string" ? result.error : "Could not load payment options.");
+      }
+      setPaymentCurrencies(result.currencies);
+    } catch (error) {
+      setSubscriptionError(error instanceof Error ? error.message : "Could not load payment options.");
+    } finally {
+      setPaymentCurrenciesLoading(false);
+    }
+  };
+
+  const handleSubscribe = async (currency: string) => {
     setPaymentBusy(true);
     setSubscriptionError("");
     try {
@@ -374,7 +402,11 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       const response = await fetch("/api/subscription/payments", {
         method: "POST",
         cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ currency }),
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
       });
       const result = await response.json() as SubscriptionPayment & { error?: unknown };
       if (!response.ok) {
@@ -384,6 +416,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         throw new Error("Payment instructions were incomplete. Please try again.");
       }
       setSubscriptionPayment(result);
+      setCheckoutOpen(false);
+      router.push(`/payment/status?order_id=${encodeURIComponent(result.orderId)}`);
     } catch (error) {
       setSubscriptionError(error instanceof Error ? error.message : "Could not prepare payment.");
     } finally {
@@ -454,6 +488,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   useEffect(() => {
     const url = new URL(window.location.href);
     const oauthResult = url.searchParams.get("deriv_oauth");
+    const requestedView = url.searchParams.get("view");
+    if (requestedView === "settings") setActiveView("settings");
+    if (requestedView) url.searchParams.delete("view");
     if (oauthResult) {
       setDerivMessage(
         oauthResult === "connected"
@@ -475,6 +512,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
                         : "Deriv authorization failed. Please try again.",
       );
       url.searchParams.delete("deriv_oauth");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    } else if (requestedView) {
       window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     }
     void loadDerivSession();
@@ -1367,13 +1406,15 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             subscription={subscription}
             subscriptionLoading={subscriptionLoading}
             subscriptionError={subscriptionError}
-            payment={subscriptionPayment}
             checkoutOpen={checkoutOpen}
             paymentHistory={paymentHistory}
             paymentHistoryLoading={paymentHistoryLoading}
             paymentHistoryError={paymentHistoryError}
+            paymentCurrencies={paymentCurrencies}
+            paymentCurrenciesLoading={paymentCurrenciesLoading}
             paymentBusy={paymentBusy}
-            onSubscribe={() => void handleSubscribe()}
+            onStartCheckout={() => void handleStartCheckout()}
+            onSubscribe={(currency) => void handleSubscribe(currency)}
             onBackFromCheckout={() => setCheckoutOpen(false)}
           />
         </div>
