@@ -74,7 +74,10 @@ export function PaymentReturnPage({
 
   useEffect(() => {
     let active = true;
+    let requestPending = false;
     const refresh = async () => {
+      if (requestPending) return;
+      requestPending = true;
       try {
         if (!orderId) throw new Error("The payment order could not be identified.");
         if (!supabase) throw new Error("Sign in to verify your payment.");
@@ -114,13 +117,15 @@ export function PaymentReturnPage({
         if (active) {
           setError(refreshError instanceof Error ? refreshError.message : "Could not verify payment status.");
         }
+      } finally {
+        requestPending = false;
       }
     };
 
     void refresh();
     const intervalId = window.setInterval(() => {
       if (!terminalStatuses.has(paymentStatusRef.current)) void refresh();
-    }, 4000);
+    }, 15_000);
     return () => {
       active = false;
       window.clearInterval(intervalId);

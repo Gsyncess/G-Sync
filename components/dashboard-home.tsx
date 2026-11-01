@@ -224,6 +224,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const tradeToastTimerRef = useRef<number | null>(null);
   const tradeToastIdRef = useRef(0);
   const balanceRefreshRef = useRef(false);
+  const lastBalanceRefreshAtRef = useRef(0);
+  const botRateLimitUntilRef = useRef(0);
   const subscriptionRefreshRef = useRef(false);
   const botRuntimeRef = useRef<BotRuntime>({
     running: false,
@@ -331,10 +333,11 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   }, [refreshPaymentHistory]);
 
   useEffect(() => {
+    if (paymentScreen) return;
     void refreshSubscription();
-    const intervalId = window.setInterval(() => void refreshSubscription(), 30_000);
+    const intervalId = window.setInterval(() => void refreshSubscription(), 120_000);
     return () => window.clearInterval(intervalId);
-  }, [refreshSubscription]);
+  }, [paymentScreen, refreshSubscription]);
 
   const handleStartCheckout = async () => {
     setCheckoutOpen(true);
@@ -393,8 +396,14 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   };
 
   const refreshDerivAccounts = useCallback(async () => {
-    if (balanceRefreshRef.current || botRuntimeRef.current.inFlight) return;
+    const now = Date.now();
+    if (
+      balanceRefreshRef.current ||
+      botRuntimeRef.current.inFlight ||
+      now - lastBalanceRefreshAtRef.current < 30_000
+    ) return;
     balanceRefreshRef.current = true;
+    lastBalanceRefreshAtRef.current = now;
     try {
       const response = await fetch("/api/deriv/session", { cache: "no-store" });
       const result = await response.json() as DerivSessionResponse;
@@ -497,17 +506,17 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   }, [loadDerivSession]);
 
   useEffect(() => {
-    if (!derivConnected || !selectedDerivAccountId) return;
+    if (!derivConnected || !selectedDerivAccountId || paymentScreen) return;
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshDerivAccounts();
     };
-    const intervalId = window.setInterval(refreshWhenVisible, 15_000);
+    const intervalId = window.setInterval(refreshWhenVisible, 60_000);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [derivConnected, refreshDerivAccounts, selectedDerivAccountId]);
+  }, [derivConnected, paymentScreen, refreshDerivAccounts, selectedDerivAccountId]);
 
   useEffect(() => {
     if (!derivConnected || !selectedDerivAccountId) return;
@@ -645,6 +654,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       !signal.ready ||
       !runtime.running ||
       runtime.inFlight ||
+      Date.now() < botRateLimitUntilRef.current ||
       marketFeedStatusRef.current !== "Live" ||
       !signal.crossover
     ) return;
@@ -699,6 +709,15 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           }),
         });
         if (!response.ok) {
+          if (response.status === 429) {
+            const retryAfter = Number(response.headers.get("retry-after"));
+            const cooldownMs = Number.isFinite(retryAfter) && retryAfter > 0
+              ? retryAfter * 1000
+              : 15_000;
+            botRateLimitUntilRef.current = Date.now() + cooldownMs;
+            setBotStatus("Request limit reached. Bot remains on and will wait before the next signal.");
+            return;
+          }
           const result = await response.json() as {
             error?: unknown;
             code?: unknown;
@@ -904,7 +923,6 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         if (!runtime.unresolvedTrade) runtime.inFlight = false;
         setTradeInProgress(runtime.inFlight || runtime.unresolvedTrade);
         if (!runtime.unresolvedTrade) setTradeProgressTicks(0);
-        if (!runtime.inFlight) void refreshDerivAccounts();
       }
     })();
   }, [notifyTradeError, refreshDerivAccounts, refreshSubscription]);

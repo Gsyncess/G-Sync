@@ -2002,28 +2002,30 @@ input {
 
 .payment-return-panel {
   display: grid;
-  width: min(100%, 720px);
-  gap: 14px;
-  margin: 0 auto;
-  padding: 2px 0 24px;
+  width: min(100%, 760px);
+  min-width: 0;
+  gap: 16px;
+  margin: auto;
+  padding: 0 0 max(24px, env(safe-area-inset-bottom));
 }
 
 .payment-return-card {
   display: grid;
   width: 100%;
+  min-width: 0;
   justify-items: center;
-  gap: 14px;
+  gap: 16px;
   border: 1px solid #e6ece8;
   border-radius: 18px;
   background: #fff;
-  padding: clamp(20px, 4vw, 30px);
+  padding: clamp(24px, 5vw, 36px);
   box-shadow: 0 8px 26px rgb(22 37 53 / 6%);
   text-align: center;
 }
 
 .payment-return-back {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 44px;
   align-items: center;
   justify-self: start;
   gap: 8px;
@@ -2033,7 +2035,7 @@ input {
   padding: 0 10px;
   color: #435367;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
 }
 
@@ -2070,7 +2072,7 @@ input {
 .payment-return-card h1 {
   margin: 0;
   color: #19273b;
-  font-size: clamp(24px, 5vw, 30px);
+  font-size: clamp(28px, 5vw, 36px);
   font-weight: 760;
   letter-spacing: -0.04em;
 }
@@ -2079,7 +2081,7 @@ input {
   margin: 0;
   max-width: 430px;
   color: #788493;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.65;
 }
 
@@ -2093,28 +2095,28 @@ input {
 
 .payment-return-amount {
   color: #243248 !important;
-  font-size: 18px !important;
+  font-size: clamp(20px, 4vw, 24px) !important;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
 }
 
 .payment-return-note {
-  font-size: 12px !important;
+  font-size: 14px !important;
 }
 
 .payment-expiry-countdown {
   border: 1px solid #f1dfb8;
   border-radius: 999px;
   background: #fffaf0;
-  padding: 7px 12px;
+  padding: 8px 14px;
   color: #80611f;
-  font-size: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
 
 .payment-return-qr {
-  width: min(100%, 220px);
+  width: min(100%, 240px);
   aspect-ratio: 1;
   border: 1px solid #edf1ef;
   border-radius: 14px;
@@ -2132,14 +2134,50 @@ input {
   padding: 11px;
   color: #435367;
   font-family: var(--font-geist-mono), ui-monospace, monospace;
-  font-size: 10px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
   user-select: text;
 }
 
+.payment-return-card .payment-status {
+  font-size: 14px;
+}
+
+.payment-return-card .payment-address-label {
+  font-size: 12px;
+}
+
+.payment-return-card .payment-copy-button,
+.payment-return-card .subscription-start-button {
+  min-height: 46px;
+  padding-inline: 16px;
+  font-size: 14px;
+}
+
 .payment-return-card .checkout-order-id {
+  display: block;
   width: 100%;
   margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.dashboard-content.dashboard-content-payment {
+  min-height: 0;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+
+.dashboard-content-payment .dashboard-settings-view {
+  display: flex;
+  min-height: 0;
+  flex: 1 0 auto;
+  flex-direction: column;
+}
+
+@media (min-width: 600px) {
+  .dashboard-content.dashboard-content-payment {
+    padding: max(20px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
