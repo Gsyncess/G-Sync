@@ -72,6 +72,10 @@ export function MarketConsole({
   const nextIdRef = useRef(0);
   const showAnalysisRef = useRef(showAnalysis);
   showAnalysisRef.current = showAnalysis;
+  const newestEntry = entries[0];
+  const newestEntryId = newestEntry?.id;
+  const newestEntryMessage = newestEntry?.message;
+  const [typedCharacterCount, setTypedCharacterCount] = useState(0);
   const candleStateRef = useRef<CandleState>({
     closedCandles: [],
     currentCandle: null,
@@ -225,6 +229,21 @@ export function MarketConsole({
   }, [showAnalysis, tradeEvents]);
 
   useEffect(() => {
+    if (newestEntryMessage === undefined) {
+      setTypedCharacterCount(0);
+      return;
+    }
+    let typedCharacters = 0;
+    setTypedCharacterCount(0);
+    const timerId = window.setInterval(() => {
+      typedCharacters = Math.min(typedCharacters + 1, newestEntryMessage.length);
+      setTypedCharacterCount(typedCharacters);
+      if (typedCharacters >= newestEntryMessage.length) window.clearInterval(timerId);
+    }, 18);
+    return () => window.clearInterval(timerId);
+  }, [newestEntryId, newestEntryMessage]);
+
+  useEffect(() => {
     entriesRef.current?.scrollTo({ top: 0 });
   }, [entries]);
 
@@ -234,12 +253,17 @@ export function MarketConsole({
         <div className="market-console-output" ref={entriesRef} role="log" aria-label="Trading activity" aria-live="off">
           {entries.length === 0 ? (
             <p className="market-console-empty">Waiting for live market activity…</p>
-          ) : entries.map((entry) => (
+          ) : entries.map((entry, index) => (
             <div className={`market-console-entry market-console-${entry.category}`} key={entry.id}>
               <span className="market-console-entry-marker" aria-hidden="true" />
               <time>{entry.time}</time>
               <strong>{entry.label}</strong>
-              <span>{entry.message}</span>
+              <span className="market-console-entry-message">
+                {index === 0 ? entry.message.slice(0, typedCharacterCount) : entry.message}
+                {index === 0 && typedCharacterCount < entry.message.length && (
+                  <span className="market-console-cursor" aria-hidden="true" />
+                )}
+              </span>
             </div>
           ))}
         </div>

@@ -731,10 +731,14 @@ input {
 }
 
 .market-console-output {
+  display: flex;
   width: 100%;
   height: 100%;
   min-height: 0;
   flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   overflow: auto;
   padding: 14px 16px;
   background: #fff;
@@ -747,6 +751,7 @@ input {
 
 .market-console-entry {
   display: grid;
+  flex: none;
   grid-template-columns: 6px 78px 72px minmax(0, 1fr);
   align-items: baseline;
   gap: 8px;
@@ -765,11 +770,26 @@ input {
   letter-spacing: 0.035em;
 }
 
-.market-console-entry > span:last-child {
+.market-console-entry-message {
+  min-width: 0;
   color: #263447;
   font-family: var(--font-geist-sans), sans-serif;
   font-size: 11px;
   line-height: 1.5;
+}
+
+.market-console-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 2px;
+  background: #3f6fa5;
+  vertical-align: text-bottom;
+  animation: market-console-cursor-blink 800ms steps(2, start) infinite;
+}
+
+@keyframes market-console-cursor-blink {
+  to { visibility: hidden; }
 }
 
 .market-console-entry-marker {
@@ -2244,7 +2264,8 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .checkout-spinner-icon {
+  .checkout-spinner-icon,
+  .market-console-cursor {
     animation: none;
   }
 }
