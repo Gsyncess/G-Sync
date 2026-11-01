@@ -8,8 +8,11 @@ create table if not exists public.profiles (
 );
 
 alter table public.profiles
+  add column if not exists email text,
   add column if not exists username text,
-  add column if not exists display_name text;
+  add column if not exists display_name text,
+  add column if not exists created_at timestamptz not null default now(),
+  add column if not exists updated_at timestamptz not null default now();
 
 alter table public.profiles enable row level security;
 
