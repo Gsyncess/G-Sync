@@ -747,30 +747,93 @@ input {
 
 .market-console-entry {
   display: grid;
-  grid-template-columns: 90px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 6px 78px 72px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
   overflow-wrap: anywhere;
 }
 
 .market-console-entry time {
   color: #8994a3;
   font-variant-numeric: tabular-nums;
+  font-size: 10px;
 }
 
-.market-console-price-up,
-.market-console-bullish {
-  color: #168c7a;
+.market-console-entry > strong {
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.035em;
 }
 
-.market-console-price-down,
-.market-console-bearish,
-.market-console-error {
+.market-console-entry > span:last-child {
+  color: #263447;
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.market-console-entry-marker {
+  width: 5px;
+  height: 5px;
+  align-self: center;
+  border-radius: 50%;
+  background: #647184;
+}
+
+.market-console-system > strong {
+  color: #3f6fa5;
+}
+
+.market-console-system .market-console-entry-marker {
+  background: #3f6fa5;
+}
+
+.market-console-success > strong {
+  color: #16845a;
+}
+
+.market-console-success .market-console-entry-marker {
+  background: #16845a;
+}
+
+.market-console-monitoring > strong {
+  color: #168da0;
+}
+
+.market-console-monitoring .market-console-entry-marker {
+  background: #168da0;
+}
+
+.market-console-signal > strong {
+  color: #b68225;
+}
+
+.market-console-signal .market-console-entry-marker {
+  background: #b68225;
+}
+
+.market-console-warning > strong {
+  color: #d47729;
+}
+
+.market-console-warning .market-console-entry-marker {
+  background: #d47729;
+}
+
+.market-console-error > strong {
   color: #c65050;
 }
 
-.market-console-price-neutral,
-.market-console-neutral {
-  color: #566579;
+.market-console-error .market-console-entry-marker {
+  background: #c65050;
+}
+
+.market-console-paused > strong {
+  color: #8994a3;
+}
+
+.market-console-paused .market-console-entry-marker {
+  background: #8994a3;
 }
 
 .market-console-empty {
@@ -1914,8 +1977,8 @@ input {
 
 @media (max-width: 480px) {
   .market-console-entry {
-    grid-template-columns: 72px minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: 5px 70px 62px minmax(0, 1fr);
+    gap: 5px;
   }
 
   .history-panel {

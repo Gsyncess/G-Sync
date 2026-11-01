@@ -15,7 +15,12 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import { MarketConsole, type MarketSignal } from "@/components/market-console";
+import {
+  MarketConsole,
+  type MarketConsoleCategory,
+  type MarketConsoleEvent,
+  type MarketSignal,
+} from "@/components/market-console";
 import { SignalPage, type SignalConfig } from "@/components/signal-page";
 import { PaymentReturnPage } from "@/components/payment-return-page";
 import { RobotLogo } from "@/components/robot-logo";
@@ -55,6 +60,11 @@ type OpenTradeDetails = {
   payout: number;
   currency: string;
   contractType: "CALL" | "PUT";
+};
+
+type TradeProgress = {
+  ticksPassed: number;
+  totalTicks: number;
 };
 
 type TradeHistoryEntry = {
@@ -145,10 +155,11 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const [derivMenuOpen, setDerivMenuOpen] = useState(false);
   const [botRunning, setBotRunning] = useState(false);
   const [tradeInProgress, setTradeInProgress] = useState(false);
-  const [tradeProgressTicks, setTradeProgressTicks] = useState(0);
+  const [tradeProgressPercent, setTradeProgressPercent] = useState(0);
   const [openTradeDetails, setOpenTradeDetails] = useState<OpenTradeDetails | null>(null);
   const [botStatus, setBotStatus] = useState("Ready");
   const [tradeErrorToast, setTradeErrorToast] = useState<TradeErrorToast | null>(null);
+  const [tradeConsoleEvents, setTradeConsoleEvents] = useState<MarketConsoleEvent[]>([]);
   const [marketFeedStatus, setMarketFeedStatus] = useState<"Connecting" | "Live" | "Reconnecting" | "Unavailable">("Connecting");
   const [activeView, setActiveView] = useState<"home" | "signals" | "history" | "settings">("home");
   const [subscription, setSubscription] = useState<AppSubscription | null>(null);
@@ -223,6 +234,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   marketFeedStatusRef.current = marketFeedStatus;
   const tradeToastTimerRef = useRef<number | null>(null);
   const tradeToastIdRef = useRef(0);
+  const tradeConsoleEventIdRef = useRef(0);
+  const lastProcessedSignalEpochRef = useRef<number | null>(null);
   const balanceRefreshRef = useRef(false);
   const lastBalanceRefreshAtRef = useRef(0);
   const botRateLimitUntilRef = useRef(0);
@@ -644,6 +657,20 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     }, 8000);
   }, []);
 
+  const logTradeEvent = useCallback((
+    message: string,
+    category: MarketConsoleCategory,
+    label: string,
+  ) => {
+    const event = {
+      id: ++tradeConsoleEventIdRef.current,
+      message,
+      category,
+      label,
+    };
+    setTradeConsoleEvents((current) => [...current.slice(-49), event]);
+  }, []);
+
   const handleFeedStatus = useCallback((status: typeof marketFeedStatus) => {
     setMarketFeedStatus(status);
   }, []);
@@ -652,8 +679,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     const runtime = botRuntimeRef.current;
     if (
       !signal.ready ||
+      signal.candleEpoch === null ||
       !runtime.running ||
       runtime.inFlight ||
+      lastProcessedSignalEpochRef.current === signal.candleEpoch ||
       Date.now() < botRateLimitUntilRef.current ||
       marketFeedStatusRef.current !== "Live" ||
       !signal.crossover
@@ -665,6 +694,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
       runtime.sessionLimitReached = true;
       setBotRunning(false);
       setBotStatus(runtime.sessionProfit >= config.targetProfit ? "Session profit target reached" : "Session loss limit reached");
+      logTradeEvent("Risk limit reached", "warning", "RISK");
       return;
     }
 
@@ -677,12 +707,14 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     }
 
     const contractType = signal.crossover;
+    lastProcessedSignalEpochRef.current = signal.candleEpoch;
     const stake = runtime.nextStake ?? config.stakeAmount;
     if (!Number.isFinite(account.balance) || stake > account.balance) {
       runtime.running = false;
       setBotRunning(false);
       const message = getInsufficientBalanceMessage(account, stake);
       setBotStatus(message);
+      logTradeEvent("Risk limit reached", "warning", "RISK");
       notifyTradeError(message);
       void refreshDerivAccounts();
       return;
@@ -690,9 +722,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
 
     runtime.inFlight = true;
     setTradeInProgress(true);
-    setTradeProgressTicks(0);
+    setTradeProgressPercent(0);
     setOpenTradeDetails(null);
-    setBotStatus(`${getTradeDirection(contractType)} · trade in progress`);
+    setBotStatus("Trade in progress");
+    logTradeEvent("Executing trade", "system", "EXECUTION");
     void (async () => {
       try {
       const accessToken = await getSupabaseAccessToken();
@@ -705,9 +738,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         body: JSON.stringify({
           accountId: account.accountId,
           contractType,
-            stake,
-          }),
-        });
+          stake,
+          candleEpoch: signal.candleEpoch,
+        }),
+      });
         if (!response.ok) {
           if (response.status === 429) {
             const retryAfter = Number(response.headers.get("retry-after"));
@@ -716,6 +750,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
               : 15_000;
             botRateLimitUntilRef.current = Date.now() + cooldownMs;
             setBotStatus("Request limit reached. Bot remains on and will wait before the next signal.");
+            logTradeEvent("Trading temporarily paused", "paused", "PAUSED");
             return;
           }
           const result = await response.json() as {
@@ -723,6 +758,15 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             code?: unknown;
             tradeMayBeOpen?: unknown;
           };
+          if (
+            result.code === "STRATEGY_SIGNAL_STALE" ||
+            result.code === "STRATEGY_SIGNAL_INVALID" ||
+            result.code === "STRATEGY_SIGNAL_DUPLICATE"
+          ) {
+            setBotStatus("Trading opportunity expired. Monitoring market activity.");
+            logTradeEvent("Trading temporarily paused", "paused", "PAUSED");
+            return;
+          }
           const tradeMayBeOpen = result.tradeMayBeOpen === true;
           runtime.inFlight = tradeMayBeOpen;
           runtime.unresolvedTrade = tradeMayBeOpen;
@@ -797,7 +841,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             ) {
               throw new Error("Deriv returned invalid contract progress.");
             }
-            setTradeProgressTicks(Math.max(0, Math.min(5, update.ticksPassed)));
+            setTradeProgressPercent(update.totalTicks > 0
+              ? Math.max(0, Math.min(100, (update.ticksPassed / update.totalTicks) * 100))
+              : 0);
             return;
           }
 
@@ -825,7 +871,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
               profit: update.profit,
               completedAt,
             };
-            setTradeProgressTicks(5);
+            setTradeProgressPercent(100);
             setOpenTradeDetails(null);
             return;
           }
@@ -838,7 +884,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             setBotRunning(false);
             if (!tradeMayBeOpen) {
               setOpenTradeDetails(null);
-              setTradeProgressTicks(0);
+              setTradeProgressPercent(0);
             }
             const errorMessage = update.code === "INSUFFICIENT_BALANCE"
               ? getInsufficientBalanceMessage(account, stake)
@@ -847,6 +893,11 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
               tradeMayBeOpen
                 ? "Trade result unconfirmed. Check Deriv open positions; bot stopped."
                 : errorMessage,
+            );
+            logTradeEvent(
+              tradeMayBeOpen ? "Trading temporarily paused" : "Trade was not completed",
+              tradeMayBeOpen ? "paused" : "error",
+              tradeMayBeOpen ? "PAUSED" : "ERROR",
             );
             notifyTradeError(errorMessage);
             if (update.code === "INSUFFICIENT_BALANCE") void refreshDerivAccounts();
@@ -877,6 +928,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
 
         const profit = settledProfit;
         setTradeHistory((current) => [completedTrade, ...current].slice(0, 100));
+        logTradeEvent("Trade completed", profit > 0 ? "success" : profit < 0 ? "error" : "system", "RESULT");
+        logTradeEvent("Contract settled", "success", "SETTLED");
         runtime.sessionProfit += profit;
         if (profit > 0) {
           runtime.nextStake = config.stakeAmount;
@@ -895,11 +948,13 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session profit target reached");
+          logTradeEvent("Risk limit reached", "warning", "RISK");
         } else if (runtime.sessionProfit <= -botConfigRef.current.targetLoss) {
           runtime.running = false;
           runtime.sessionLimitReached = true;
           setBotRunning(false);
           setBotStatus("Session loss limit reached");
+          logTradeEvent("Risk limit reached", "error", "RISK");
         } else {
           setBotStatus(
             runtime.running
@@ -919,13 +974,14 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         setBotStatus(
           `${errorMessage} Check Deriv positions before restarting.`,
         );
+        logTradeEvent("Trading temporarily paused", "paused", "PAUSED");
       } finally {
         if (!runtime.unresolvedTrade) runtime.inFlight = false;
         setTradeInProgress(runtime.inFlight || runtime.unresolvedTrade);
-        if (!runtime.unresolvedTrade) setTradeProgressTicks(0);
+        if (!runtime.unresolvedTrade) setTradeProgressPercent(0);
       }
     })();
-  }, [notifyTradeError, refreshDerivAccounts, refreshSubscription]);
+  }, [logTradeEvent, notifyTradeError, refreshDerivAccounts, refreshSubscription]);
 
   const disconnectDeriv = async () => {
     botRuntimeRef.current.running = false;
@@ -985,11 +1041,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     runtime.running = true;
     runtime.nextStake ??= botConfig.stakeAmount;
     setBotRunning(true);
-    setBotStatus(
-      selectedDerivAccount.accountType === "real"
-        ? "Watching market · real-account trades enabled"
-        : "Watching market · demo account",
-    );
+    setBotStatus("Monitoring market activity");
+    logTradeEvent("Monitoring market activity", "monitoring", "MONITOR");
   };
 
   const handleStopBot = () => {
@@ -1000,6 +1053,7 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         ? "Stopped · current contract will finish"
         : "Ready",
     );
+    logTradeEvent("Trading temporarily paused", "paused", "PAUSED");
   };
 
   const accountSummary = derivAccounts
@@ -1197,8 +1251,9 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
             </div>
 
             <MarketConsole
-              showAnalysis={derivConnected && botRunning}
+              showAnalysis={derivConnected && (botRunning || tradeInProgress || tradeConsoleEvents.length > 0)}
               idleMessage={marketConsoleIdleMessage}
+              tradeEvents={tradeConsoleEvents}
               onMarketSignal={handleMarketSignal}
               onFeedStatus={handleFeedStatus}
             />
@@ -1267,10 +1322,10 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
                   aria-label="Trade progress"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={Math.round((tradeProgressTicks / 5) * 100)}
+                  aria-valuenow={Math.round(tradeProgressPercent)}
                   aria-valuetext={tradeInProgress ? "Trade is being processed and awaiting settlement" : "No open trade"}
                 >
-                  <span style={{ width: `${(tradeProgressTicks / 5) * 100}%` }} />
+                  <span style={{ width: `${tradeProgressPercent}%` }} />
                 </div>
                 <div className="bot-trade-values" aria-live="polite">
                   {openTradeDetails ? (

@@ -183,7 +183,7 @@ export async function getDerivTradingOtpUrl(
   return otpUrl;
 }
 
-export async function executeDerivFiveTickTrade(options: TradeOptions) {
+export async function executeDerivOneMinuteTrade(options: TradeOptions) {
   const expectedPath = `/trading/v1/options/ws/${options.accountType}`;
   if (options.otpUrl.pathname !== expectedPath) {
     throw new DerivTradeError("Deriv returned a trading connection for a different account type.");
@@ -241,8 +241,8 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
         basis: "stake",
         contract_type: options.contractType,
         currency: options.currency,
-        duration: 5,
-        duration_unit: "t",
+        duration: 1,
+        duration_unit: "m",
         underlying_symbol: "R_100",
         req_id: 1,
       }, "Could not request a Deriv trade proposal.");
@@ -312,10 +312,10 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
       if (phase === "contract" && message.msg_type === "proposal_open_contract") {
         const contract = message.proposal_open_contract;
         if (contract?.contract_id === contractId && Array.isArray(contract.tick_stream)) {
-          const ticksPassed = Math.min(5, contract.tick_stream.length);
           const totalTicks = typeof contract.tick_count === "number" && contract.tick_count > 0
             ? contract.tick_count
-            : 5;
+            : 60;
+          const ticksPassed = Math.min(totalTicks, contract.tick_stream.length);
           options.onProgress?.({ ticksPassed, totalTicks });
         }
         if (

@@ -8,10 +8,12 @@ import { createClient } from "@supabase/supabase-js";
 import { Server as SocketServer } from "socket.io";
 import {
   DerivTradeError,
-  executeDerivFiveTickTrade,
+  executeDerivOneMinuteTrade,
   getDerivTradingOtpUrl,
   subscribeDerivBalance,
 } from "./lib/deriv-trading";
+import { fetchRecentDerivCandles } from "./lib/deriv-market-data";
+import { DEFAULT_STRATEGY_CONFIG, evaluateDerivStrategy } from "./lib/deriv-strategy";
 
 const development = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
@@ -98,6 +100,18 @@ const securityHeaders = {
 const oauthCookiePath = "/api/deriv/oauth/";
 const derivCookiePath = "/api/deriv";
 const activeDerivTrades = new Set<string>();
+const activeDerivUsers = new Set<string>();
+const processedDerivSignals = new Map<string, number>();
+
+function claimDerivSignal(key: string) {
+  const now = Date.now();
+  for (const [signalKey, expiresAt] of processedDerivSignals) {
+    if (expiresAt <= now) processedDerivSignals.delete(signalKey);
+  }
+  if (processedDerivSignals.has(key)) return false;
+  processedDerivSignals.set(key, now + 5 * 60_000);
+  return true;
+}
 
 async function authenticateSupabaseRequest(request: express.Request) {
   if (!supabaseAuth) return null;
@@ -373,6 +387,7 @@ async function startServer() {
     rateLimit({
       windowMs: 15 * 60 * 1000,
       limit: 120,
+      skip: (request) => request.path === "/deriv/bot-trade",
       standardHeaders: "draft-8",
       legacyHeaders: false,
       message: { error: "Too many requests. Please try again shortly." },
@@ -1284,14 +1299,14 @@ async function startServer() {
         return;
       }
 
+      const user = await authenticateSupabaseRequest(request);
+      if (!user) {
+        response.status(supabaseAuth ? 401 : 503).json({
+          error: supabaseAuth ? "Sign in before starting the bot." : "Supabase authentication is not configured.",
+        });
+        return;
+      }
       if (subscriptionsEnabled) {
-        const user = await authenticateSupabaseRequest(request);
-        if (!user) {
-          response.status(supabaseAuth ? 401 : 503).json({
-            error: supabaseAuth ? "Sign in before starting the bot." : "Supabase authentication is not configured.",
-          });
-          return;
-        }
         const subscription = await getSubscriptionExpiry(user.id);
         if (subscription.error) {
           response.status(503).json({ error: subscription.error });
@@ -1312,23 +1327,70 @@ async function startServer() {
         typeof body !== "object" ||
         typeof (body as Record<string, unknown>).accountId !== "string" ||
         typeof (body as Record<string, unknown>).contractType !== "string" ||
-        typeof (body as Record<string, unknown>).stake !== "number"
+        typeof (body as Record<string, unknown>).stake !== "number" ||
+        typeof (body as Record<string, unknown>).candleEpoch !== "number"
       ) {
         response.status(400).json({ error: "Invalid bot trade request." });
         return;
       }
-      const { accountId, contractType, stake } = body as {
+      const { accountId, contractType, stake, candleEpoch } = body as {
         accountId: string;
         contractType: string;
         stake: number;
+        candleEpoch: number;
       };
       if (
         !/^[a-zA-Z0-9_-]{2,64}$/.test(accountId) ||
         (contractType !== "CALL" && contractType !== "PUT") ||
         !Number.isFinite(stake) ||
-        stake <= 0
+        stake <= 0 ||
+        !Number.isSafeInteger(candleEpoch) ||
+        candleEpoch % 60 !== 0
       ) {
         response.status(400).json({ error: "Invalid account, direction, or stake." });
+        return;
+      }
+
+      let marketCandles;
+      try {
+        marketCandles = await fetchRecentDerivCandles("R_100");
+      } catch (error) {
+        console.error("Could not validate a bot trade against Deriv market data.", error);
+        response.status(503).json({ error: "Could not verify the trading opportunity. Please wait for the next signal." });
+        return;
+      }
+      const currentMinuteStart = Math.floor(Date.now() / 60_000) * 60;
+      const closedCandles = marketCandles.filter(
+        (candle) => candle.epoch + 60 <= currentMinuteStart,
+      );
+      const latestClosedEpoch = closedCandles[closedCandles.length - 1]?.epoch;
+      if (
+        latestClosedEpoch === undefined ||
+        candleEpoch > latestClosedEpoch ||
+        latestClosedEpoch - candleEpoch > 120
+      ) {
+        response.status(409).json({
+          code: "STRATEGY_SIGNAL_STALE",
+          error: "That trading opportunity has expired. Waiting for the next confirmed setup.",
+        });
+        return;
+      }
+      const signalIndex = closedCandles.findIndex((candle) => candle.epoch === candleEpoch);
+      const validatedSignal = signalIndex >= 0
+        ? evaluateDerivStrategy(
+            closedCandles.slice(0, signalIndex + 1),
+            DEFAULT_STRATEGY_CONFIG,
+          )
+        : null;
+      if (
+        !validatedSignal ||
+        validatedSignal.candleEpoch !== candleEpoch ||
+        validatedSignal.contractType !== contractType
+      ) {
+        response.status(409).json({
+          code: "STRATEGY_SIGNAL_INVALID",
+          error: "The trading opportunity could not be confirmed. Waiting for the next setup.",
+        });
         return;
       }
 
@@ -1396,16 +1458,24 @@ async function startServer() {
       }
 
       const tradeKey = `${account.accountType}:${account.accountId}`;
-      if (activeDerivTrades.has(tradeKey)) {
+      if (activeDerivTrades.has(tradeKey) || activeDerivUsers.has(user.id)) {
         response.status(409).json({ error: "A contract is already being processed for this account." });
         return;
       }
+      if (!claimDerivSignal(`${user.id}:${tradeKey}:${candleEpoch}`)) {
+        response.status(409).json({
+          code: "STRATEGY_SIGNAL_DUPLICATE",
+          error: "This trading opportunity has already been processed.",
+        });
+        return;
+      }
       activeDerivTrades.add(tradeKey);
+      activeDerivUsers.add(user.id);
       let streamStarted = false;
       try {
         const otpResult = await otpPromise;
         if ("error" in otpResult) throw otpResult.error;
-        const trade = await executeDerivFiveTickTrade({
+        const trade = await executeDerivOneMinuteTrade({
           accessToken,
           accountId,
           accountType: account.accountType,
@@ -1468,6 +1538,7 @@ async function startServer() {
         }
       } finally {
         activeDerivTrades.delete(tradeKey);
+        activeDerivUsers.delete(user.id);
       }
     },
   );

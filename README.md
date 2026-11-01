@@ -71,7 +71,9 @@ Express applies Helmet security headers and a 120-request-per-15-minute limit to
 3. Deploy/restart the app, sign in, and use **Connect** to authorize a Deriv account. OAuth tokens are held in HttpOnly cookies and are not exposed to browser JavaScript.
 4. Select a demo account first to test the bot and its risk limits before choosing a real account.
 
-The market console reads public Deriv Volatility 100 (`R_100`) quotes. The bot calculates DPO(14) from each unique incoming tick (not minute candles) and evaluates zero-line crossovers for Rise (`CALL`) and Fall (`PUT`). It requires a warm-up series before trading. Signals are not guarantees of profit; users control the stake and session risk limits in Configure.
+The market console reads public Deriv Volatility 100 (`R_100`) one-minute candles. The bot evaluates EMA 5/14 crosses supported by a Williams Fractal confirmed by two later candles, then places a one-minute Rise (`CALL`) or Fall (`PUT`) contract. The server independently checks the signal against recent closed candles and rejects stale or duplicate opportunities. Console messages intentionally do not show indicator values or internal strategy details. Test the strategy on a Deriv demo account before using a real account; trading involves financial risk.
+
+Bot signal generation is currently coordinated by the signed-in app page. It does not continue placing trades while the browser is closed or suspended, and bot-session state and history are not yet persisted in Supabase. Continuous background trading and recovery across app/server restarts require a dedicated always-on Node.js worker, durable Supabase session/trade records, encrypted server-side Deriv refresh-token storage, and a cross-instance session lease. Supabase Edge Functions are not suitable for this continuous worker.
 
 ## Heroku deployment
 

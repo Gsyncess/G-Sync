@@ -1,25 +1,29 @@
 export type DerivMarketSubscriptionRequest = {
   symbol: string;
+  granularity: number;
 };
 
-export type DerivMarketQuote = {
-  Date: string;
-  Close: number;
+export type DerivMarketCandle = {
+  epoch: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
   DT: Date;
-  tick?: Record<string, unknown>;
 };
 
 type DerivResponse = {
   req_id?: number;
   subscription?: { id?: string };
   echo_req?: Record<string, unknown>;
-  tick?: { quote: number; epoch: number; [key: string]: unknown };
+  candles?: Array<Record<string, unknown>>;
+  ohlc?: Record<string, unknown>;
   error?: { message?: string };
 };
 
 type Subscription = {
   request: DerivMarketSubscriptionRequest;
-  callbacks: Set<(quote: DerivMarketQuote) => void>;
+  callbacks: Set<(candle: DerivMarketCandle, historical: boolean) => void>;
   id?: string;
   openingGeneration?: number;
 };
@@ -31,10 +35,29 @@ type PendingRequest = {
   subscriptionKey?: string;
 };
 
-const subscriptionKey = (request: { symbol?: string; ticks_history?: string }) =>
-  request.symbol ?? request.ticks_history ?? "";
+const subscriptionKey = (request: { symbol?: string; ticks_history?: string; granularity?: number }) => {
+  const symbol = request.symbol ?? request.ticks_history ?? "";
+  return request.granularity ? `${symbol}:${request.granularity}` : symbol;
+};
 
 const DERIV_PUBLIC_WEBSOCKET = "wss://api.derivws.com/trading/v1/options/ws/public";
+
+function normalizeCandle(value: Record<string, unknown>): DerivMarketCandle | null {
+  const epoch = Number(value.epoch);
+  const open = Number(value.open);
+  const high = Number(value.high);
+  const low = Number(value.low);
+  const close = Number(value.close);
+  if (
+    !Number.isFinite(epoch) ||
+    !Number.isFinite(open) ||
+    !Number.isFinite(high) ||
+    !Number.isFinite(low) ||
+    !Number.isFinite(close) ||
+    high < low
+  ) return null;
+  return { epoch, open, high, low, close, DT: new Date(epoch * 1000) };
+}
 
 export class DerivMarketTransport {
   private socket: WebSocket | null = null;
@@ -135,32 +158,36 @@ export class DerivMarketTransport {
       requestEcho.symbol,
     ].find((value): value is string => typeof value === "string");
     const key = matchingSubscription?.[0]
-      ?? (echoedSymbol ? subscriptionKey({ symbol: echoedSymbol }) : undefined)
+      ?? (echoedSymbol
+        ? subscriptionKey({
+            symbol: echoedSymbol,
+            granularity: typeof requestEcho.granularity === "number" ? requestEcho.granularity : undefined,
+          })
+        : undefined)
       ?? pendingRequest?.subscriptionKey;
     if (!key) return;
     const subscription = this.subscriptions.get(key);
     if (!subscription) return;
     if (subscriptionId) subscription.id = subscriptionId;
 
-    if (
-      response.tick &&
-      typeof response.tick.quote === "number" &&
-      Number.isFinite(response.tick.quote) &&
-      typeof response.tick.epoch === "number" &&
-      Number.isFinite(response.tick.epoch)
-    ) {
-      const date = new Date(response.tick.epoch * 1000);
-      const quote: DerivMarketQuote = {
-        Date: date.toISOString(),
-        Close: response.tick.quote,
-        DT: date,
-        tick: response.tick,
-      };
-      subscription.callbacks.forEach((callback) => callback(quote));
+    const candles = response.candles?.flatMap((candle) => {
+      const normalized = normalizeCandle(candle);
+      return normalized ? [normalized] : [];
+    }) ?? [];
+    candles.forEach((candle) => {
+      subscription.callbacks.forEach((callback) => callback(candle, true));
+    });
+    const currentCandle = response.ohlc ? normalizeCandle(response.ohlc) : null;
+    if (currentCandle) {
+      subscription.callbacks.forEach((callback) => callback(currentCandle, false));
       if (!this.isLive) {
         this.isLive = true;
         this.onStatus("Live");
       }
+    }
+    if (candles.length > 0 && !this.isLive) {
+      this.isLive = true;
+      this.onStatus("Live");
     }
   }
 
@@ -211,7 +238,11 @@ export class DerivMarketTransport {
     const request = subscription.request;
     try {
       const response = await this.send({
-        ticks: request.symbol,
+        ticks_history: request.symbol,
+        end: "latest",
+        count: 100,
+        style: "candles",
+        granularity: request.granularity,
         subscribe: 1,
       }, generation, key);
       if (response.error) throw new Error(response.error.message ?? "Deriv subscription failed.");
@@ -245,7 +276,10 @@ export class DerivMarketTransport {
     }
   }
 
-  subscribeMarket(request: DerivMarketSubscriptionRequest, callback: (quote: DerivMarketQuote) => void) {
+  subscribeCandles(
+    request: DerivMarketSubscriptionRequest,
+    callback: (candle: DerivMarketCandle, historical: boolean) => void,
+  ) {
     const key = subscriptionKey(request);
     let subscription = this.subscriptions.get(key);
     if (!subscription) {
