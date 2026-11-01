@@ -15,6 +15,7 @@ type TradeOptions = {
   accessToken: string;
   accountId: string;
   accountType: "demo" | "real";
+  otpUrl: URL;
   contractType: "CALL" | "PUT";
   currency: string;
   stake: number;
@@ -129,7 +130,9 @@ export function subscribeDerivBalance(options: {
   return close;
 }
 
-export async function executeDerivFiveTickTrade(options: TradeOptions) {
+export async function getDerivTradingOtpUrl(
+  options: Pick<TradeOptions, "accessToken" | "accountId">,
+) {
   let otpResponse: Response;
   try {
     otpResponse = await fetch(
@@ -169,14 +172,21 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
   } catch {
     throw new DerivTradeError("Deriv returned an invalid trading connection.");
   }
-  const expectedPath = `/trading/v1/options/ws/${options.accountType}`;
   if (
     otpUrl.protocol !== "wss:" ||
     otpUrl.hostname !== "api.derivws.com" ||
-    otpUrl.pathname !== expectedPath ||
+    !/^\/trading\/v1\/options\/ws\/(demo|real)$/.test(otpUrl.pathname) ||
     !otpUrl.searchParams.has("otp")
   ) {
     throw new DerivTradeError("Deriv returned an unexpected trading connection.");
+  }
+  return otpUrl;
+}
+
+export async function executeDerivFiveTickTrade(options: TradeOptions) {
+  const expectedPath = `/trading/v1/options/ws/${options.accountType}`;
+  if (options.otpUrl.pathname !== expectedPath) {
+    throw new DerivTradeError("Deriv returned a trading connection for a different account type.");
   }
 
   return new Promise<{
@@ -187,7 +197,7 @@ export async function executeDerivFiveTickTrade(options: TradeOptions) {
     currency: string;
     profit: number;
   }>((resolve, reject) => {
-    const socket = new WebSocket(otpUrl.toString(), { handshakeTimeout: 10_000 });
+    const socket = new WebSocket(options.otpUrl.toString(), { handshakeTimeout: 10_000 });
     let phase: "proposal" | "buy" | "contract" = "proposal";
     let contractId: number | null = null;
     let actualStake: number | null = null;

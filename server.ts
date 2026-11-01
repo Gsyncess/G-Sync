@@ -9,6 +9,7 @@ import { Server as SocketServer } from "socket.io";
 import {
   DerivTradeError,
   executeDerivFiveTickTrade,
+  getDerivTradingOtpUrl,
   subscribeDerivBalance,
 } from "./lib/deriv-trading";
 
@@ -1166,6 +1167,10 @@ async function startServer() {
         return;
       }
 
+      const otpPromise = getDerivTradingOtpUrl({ accessToken, accountId }).then(
+        (otpUrl) => ({ otpUrl }),
+        (error: unknown) => ({ error }),
+      );
       let accounts: NormalizedDerivAccount[] = [];
       let accountLookupSucceeded = false;
       let lastAccountLookupStatus: number | null = null;
@@ -1224,10 +1229,13 @@ async function startServer() {
       activeDerivTrades.add(tradeKey);
       let streamStarted = false;
       try {
+        const otpResult = await otpPromise;
+        if ("error" in otpResult) throw otpResult.error;
         const trade = await executeDerivFiveTickTrade({
           accessToken,
           accountId,
           accountType: account.accountType,
+          otpUrl: otpResult.otpUrl,
           contractType,
           currency: account.currency,
           stake,
