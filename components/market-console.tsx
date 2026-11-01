@@ -36,6 +36,7 @@ const SCAN_INTERVAL = 5;
 const DPO_PERIOD = 14;
 const DPO_SHIFT = Math.floor(DPO_PERIOD / 2) + 1;
 const DPO_WARMUP_TICKS = DPO_PERIOD + DPO_SHIFT;
+const MARKET_WINDOW_TICKS = 20;
 
 export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
@@ -96,11 +97,9 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
       (quote: DerivMarketQuote) => {
         const price = quote.Close;
         const state = indicatorRef.current;
-        const tickId = quote.tick?.id;
         const tickEpoch = quote.tick?.epoch;
-        const tickIdentity = tickId !== undefined
-          ? String(tickId)
-          : `${String(tickEpoch ?? quote.Date)}:${price}`;
+        // Deriv's tick.id identifies the subscription, so deduplicate using the actual quote timestamp and price.
+        const tickIdentity = `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
         state.prices.push(price);
@@ -122,10 +121,24 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         const bias = dpo > 0 ? "bullish" : dpo < 0 ? "bearish" : "neutral";
 
         if (state.ticks % SCAN_INTERVAL === 0) {
+          const marketWindow = state.prices.slice(-MARKET_WINDOW_TICKS);
+          const support = Math.min(...marketWindow);
+          const resistance = Math.max(...marketWindow);
+          const range = resistance - support;
+          const proximity = Math.max(range * 0.2, Math.abs(price) * 0.0001);
+          const supportState = price - support <= proximity ? "support nearby" : "support below";
+          const resistanceState = resistance - price <= proximity ? "resistance nearby" : "resistance overhead";
+          const momentumStart = marketWindow[Math.max(0, marketWindow.length - 6)];
+          const momentumThreshold = Math.max(Math.abs(price) * 0.00005, Number.EPSILON);
+          const momentum = price - momentumStart > momentumThreshold
+            ? "bullish momentum"
+            : momentumStart - price > momentumThreshold
+              ? "bearish momentum"
+              : "sideways momentum";
           appendEntry(
             ready
-              ? `Market · ${MARKET_SYMBOL} · ${price.toFixed(2)} · DPO ${dpo >= 0 ? "+" : ""}${dpo.toFixed(4)} · ${bias}`
-              : `Market · ${MARKET_SYMBOL} · ${price.toFixed(2)} · DPO warm-up ${state.prices.length}/${DPO_WARMUP_TICKS} ticks`,
+              ? `Volatility 100 scan · ${bias} bias · ${momentum} · ${supportState} · ${resistanceState} · DPO ${bias}`
+              : `Volatility 100 scan · collecting one-tick DPO history · ${Math.min(state.ticks, DPO_WARMUP_TICKS)}/${DPO_WARMUP_TICKS} ticks`,
             ready ? bias : "info",
             quote.DT,
           );
@@ -141,7 +154,7 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
 
         if (ready && crossover) {
           appendEntry(
-            `Signal · ${crossover === "CALL" ? "RISE" : "FALL"}`,
+            `DPO ${crossover === "CALL" ? "bullish" : "bearish"} crossover · ${crossover === "CALL" ? "RISE" : "FALL"} signal`,
             crossover === "CALL" ? "bullish" : "bearish",
             quote.DT,
           );
