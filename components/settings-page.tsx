@@ -47,6 +47,7 @@ export type SubscriptionPaymentRecord = {
 
 type SettingsPageProps = {
   accountId: string;
+  accountIdError: string;
   username: string;
   email: string;
   subscription: AppSubscription | null;
@@ -105,6 +106,7 @@ function formatPaymentDate(value: string) {
 
 export function SettingsPage({
   accountId,
+  accountIdError,
   username,
   email,
   subscription,
@@ -282,6 +284,7 @@ export function SettingsPage({
             <span className="profile-detail-label">Account ID</span>
             <code>{accountId || "Unavailable"}</code>
           </div>
+          {accountIdError && <p className="settings-error profile-account-error" role="alert">{accountIdError}</p>}
         </div>
       </article>
 

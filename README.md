@@ -32,14 +32,16 @@ Copy `.env.example` to `.env.local` for local development. Set the same values i
 
 Supabase URL and anon key are required for authentication. The payment and subscription variables are only needed when paid mode is enabled. Keep all service-role and NOWPayments secrets server-side. Do not commit `.env.local` or production credentials.
 
-## Supabase setup
+## Supabase setup and automatic migrations
 
 1. Create a Supabase project and copy its project URL and anon key into `.env.local` (or your deployment environment).
-2. Open the Supabase **SQL Editor**, run the complete [supabase/schema.sql](supabase/schema.sql), and confirm it finishes successfully. This creates/updates the profiles, bot subscription and NOWPayments transaction tables, row-level policies, and payment activation function. Re-run the schema after pulling changes that update it.
+2. In GitHub, add these repository **Actions secrets** once: `SUPABASE_ACCESS_TOKEN` (a Supabase personal access token), `SUPABASE_DB_PASSWORD` (the project's database password), and `SUPABASE_PROJECT_ID` (the project reference from its dashboard URL). The workflow uses them to connect only to the configured project.
 3. Configure Supabase Auth email/password sign-in and sign-up for your project. For production, set the project's allowed site and redirect URLs to your deployed app.
 4. For paid subscriptions, copy the Supabase **service-role** key into `SUPABASE_SERVICE_ROLE_KEY` on the server only. Never put it in a `NEXT_PUBLIC_` variable.
 
-The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
+Database changes are versioned in [supabase/migrations/](supabase/migrations). When a migration is pushed to `main`, the GitHub Actions workflow applies pending migrations to the linked Supabase project automatically. You can also start the workflow from GitHub Actions with **Run workflow**. Do not edit the live database manually or re-run old SQL; add a new timestamped migration for each schema change. The initial migration is safe to apply to an existing installation of the previous schema.
+
+The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Each profile receives a unique `G-` account ID, for example `G-6839387474588`, generated and stored by Supabase for new and existing users. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
 
 ## Bot subscriptions and in-app payments
 
@@ -52,12 +54,12 @@ Set `SUBSCRIPTIONS_ENABLED=false` (or leave it unset) to allow bot access withou
 1. Create/configure a NOWPayments account and enable USDT on the TRC20 network.
 2. Copy the NOWPayments API key and configure an IPN secret in NOWPayments. Set them as `NOWPAYMENTS_API_KEY` and `NOWPAYMENTS_IPN_SECRET` in the server environment.
 3. Set `NOWPAYMENTS_IPN_CALLBACK_URL` to your public HTTPS app URL plus `/api/nowpayments/ipn`, for example `https://your-app.example.com/api/nowpayments/ipn`. Configure the matching callback/notification URL in NOWPayments if its account settings require one. The endpoint must be publicly reachable by NOWPayments.
-4. Ensure the updated [Supabase schema](supabase/schema.sql) has been run and set `SUPABASE_SERVICE_ROLE_KEY` on the server.
+4. Ensure the automatic Supabase migration workflow is configured and set `SUPABASE_SERVICE_ROLE_KEY` on the server.
 5. Set `SUBSCRIPTIONS_ENABLED=true` only after all of the above is configured, then deploy/restart the app.
 
 Each subscription is fixed at **$5 USD for 12 hours** and paid as USDT TRC20. Settings opens an in-app payment screen showing the amount and address returned by NOWPayments; it does not redirect to NOWPayments' hosted checkout. The server attaches the authenticated user's name, email, and a generated order ID to the payment request, then records the transaction in Supabase. Users must send the exact displayed USDT amount themselves from their wallet; the app does not withdraw funds from the wallet. Subscription access is granted only after the backend verifies the NOWPayments IPN signature and receives a `finished` payment status. The Supabase activation function is idempotent and extends an existing subscription.
 
-Test the complete checkout and signed IPN flow with NOWPayments test/sandbox credentials before taking real payments. Without valid credentials, a reachable HTTPS callback, and the schema installed in the target Supabase project, live payment activation cannot work.
+Test the complete checkout and signed IPN flow with NOWPayments test/sandbox credentials before taking real payments. Without valid credentials, a reachable HTTPS callback, and the migrations applied to the target Supabase project, live payment activation cannot work.
 
 ## Realtime and security
 

@@ -145,6 +145,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
   const [subscription, setSubscription] = useState<AppSubscription | null>(null);
   const [subscriptionLoading, setSubscriptionLoading] = useState(true);
   const [subscriptionError, setSubscriptionError] = useState("");
+  const [profileAccountCode, setProfileAccountCode] = useState<string | null>(null);
+  const [profileAccountCodeError, setProfileAccountCodeError] = useState("");
   const [subscriptionPayment, setSubscriptionPayment] = useState<SubscriptionPayment | null>(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -165,6 +167,36 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
     targetLoss: 10,
     stakeAmount: 5,
   });
+  useEffect(() => {
+    let active = true;
+    const loadProfileAccountCode = async () => {
+      if (!supabase) {
+        setProfileAccountCodeError("Supabase is not configured, so your account ID could not be loaded.");
+        return;
+      }
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("account_code")
+        .eq("id", accountId)
+        .maybeSingle();
+      if (!active) return;
+      if (error) {
+        console.error("Could not load the generated profile account ID.", error);
+        setProfileAccountCodeError("Could not load your account ID. Please try again later.");
+        return;
+      }
+      if (typeof data?.account_code !== "string" || !/^G-\d{13}$/.test(data.account_code)) {
+        setProfileAccountCodeError("Your account ID is not available yet. Please try again later.");
+        return;
+      }
+      setProfileAccountCode(data.account_code);
+      setProfileAccountCodeError("");
+    };
+    void loadProfileAccountCode();
+    return () => {
+      active = false;
+    };
+  }, [accountId]);
   const selectedDerivAccount = derivAccounts.find(
     (account) => account.accountId === selectedDerivAccountId,
   );
@@ -1312,7 +1344,8 @@ export function DashboardHome({ email, accountId, username, socketOnline, onSign
         </div>
         <div className="dashboard-settings-view" id="dashboard-settings-view" hidden={activeView !== "settings"}>
           <SettingsPage
-            accountId={accountId}
+            accountId={profileAccountCode ?? (profileAccountCodeError ? "Unavailable" : "Loading…")}
+            accountIdError={profileAccountCodeError}
             username={username}
             email={email}
             subscription={subscription}
