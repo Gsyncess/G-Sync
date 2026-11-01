@@ -1,25 +1,39 @@
-You are helping me fix a Deriv SmartChart integration in a React app. Problem:
-- The app shows “Deriv chart unavailable”.
-- Error: “can't access property ReactCurrentOwner, a.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED is undefined”.
-- The app supports multiple Deriv users through OAuth 2.0.
-- The chart should display Deriv market data. Please do the following:
-1. Inspect package.json, the React version, the SmartChart package version, and the build tool.
-2. Check for multiple or incompatible React versions in the dependency tree.
-3. Check that React and React DOM use the same compatible version.
-4. Check the SmartChart import and setup code.
-5. Check whether the chart package is compatible with the current React version and bundler.
-6. Check for incorrect server-side rendering, lazy loading, or duplicate React instances.
-7. Keep OAuth tokens out of logs, source code, and error messages.
-8. Use the public Deriv WebSocket connection for public chart data when authentication is not required:
-https://api.derivws.com/trading/v1/options/ws/public
-9. Do not change trading or OAuth logic unless it is required for the chart.
-10. If SmartChart is not compatible with the current setup, explain the exact compatibility problem and suggest a supported chart integration using Deriv market-data subscriptions. Before changing files, explain the likely cause. Then provide:
-- The files that need changes
-- The exact dependency or import changes
-- The corrected chart setup
-- The commands to install or update dependencies
-- A short test plan
-- Any information still needed from me, such as React version, SmartChart version, or build tool. Relevant Deriv API guides:
-- https://developers.deriv.com/llms/oauth.md
-- https://developers.deriv.com/llms/ws-public.md
-- https://developers.deriv.com/llms/ticks.md
+Update the existing G-Sync automated trading bot. Preserve the current app UI, background colors, console card colors, layout, and all working features.
+
+1. Automated Trading Strategy
+
+- Platform: Deriv Rise and Fall.
+- Contract duration: 1 minute.
+- Analysis timeframe: 1-minute candles.
+- Indicators: EMA 5, EMA 14, and Williams Fractal.
+- Rise setup: EMA 5 crosses above EMA 14, supported by a confirmed lower fractal.
+- Fall setup: EMA 5 crosses below EMA 14, supported by a confirmed upper fractal.
+- Require confirmation before entering trades. Handle fractal confirmation delays correctly; do not use unconfirmed fractals.
+- Keep the strategy configurable internally, and test it on a Deriv demo account before live deployment.
+
+2. Trading Console
+Display concise, real-time messages:
+
+- Trading engine initialized
+- Deriv connection established
+- Market conditions evaluated
+- Monitoring market activity
+- Trading opportunity detected
+- Executing trade
+- Trade completed
+- Contract settled
+- Risk limit reached
+- Trading temporarily paused
+
+3. Console Styling
+
+- Font sizes: timestamps 10–11px, categories 9–10px, messages 11–12px.
+- Apply dynamic colors only to log indicators, category labels, and status values.
+- Green: success; blue: system; cyan: monitoring; amber: signals; orange: warnings; red: errors/losses; grey: paused.
+- Keep the existing app background and console card colors unchanged.
+- Do not reveal indicator names, indicator values, crossover details, or internal strategy rules in the UI or logs.
+
+4. Implementation
+Use the existing Node.js backend and Deriv integration. Validate signals, prevent duplicate trades, handle API errors, and display actual trade results. Do not fabricate events or modify unrelated application features.
+
+Make only the necessary changes and report which files were modified.
