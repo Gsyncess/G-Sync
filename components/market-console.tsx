@@ -12,9 +12,11 @@ type ConsoleEntry = {
 
 type IndicatorState = {
   prices: number[];
-  ticks: number;
+  bars: number;
   previousDpo: number | null;
   lastTickIdentity: string | null;
+  currentBarStart: number | null;
+  currentBarClose: number | null;
 };
 
 export type MarketSignal = {
@@ -35,7 +37,8 @@ const MARKET_SYMBOL = "R_100";
 const SCAN_INTERVAL = 20;
 const DPO_PERIOD = 14;
 const DPO_SHIFT = Math.floor(DPO_PERIOD / 2) + 1;
-const DPO_WARMUP_TICKS = DPO_PERIOD + DPO_SHIFT;
+const BAR_DURATION_SECONDS = 60;
+const DPO_WARMUP_BARS = DPO_PERIOD + DPO_SHIFT;
 
 export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsoleProps) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
@@ -43,9 +46,11 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
   const nextIdRef = useRef(0);
   const indicatorRef = useRef<IndicatorState>({
     prices: [],
-    ticks: 0,
+    bars: 0,
     previousDpo: null,
     lastTickIdentity: null,
+    currentBarStart: null,
+    currentBarClose: null,
   });
 
   useEffect(() => {
@@ -68,9 +73,11 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         if (status === "Reconnecting" || status === "Unavailable") {
           indicatorRef.current = {
             prices: [],
-            ticks: 0,
+            bars: 0,
             previousDpo: null,
             lastTickIdentity: null,
+            currentBarStart: null,
+            currentBarClose: null,
           };
           onMarketSignal?.({
             price: 0,
@@ -103,16 +110,51 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
           : `${String(tickEpoch ?? quote.Date)}:${price}`;
         if (state.lastTickIdentity === tickIdentity) return;
         state.lastTickIdentity = tickIdentity;
-        state.ticks += 1;
-        state.prices.push(price);
-        if (state.prices.length > DPO_WARMUP_TICKS) state.prices.shift();
-        const ready = state.prices.length >= DPO_WARMUP_TICKS;
+        const epoch = typeof tickEpoch === "number" && Number.isFinite(tickEpoch)
+          ? tickEpoch
+          : Math.floor(quote.DT.getTime() / 1000);
+        const barStart = Math.floor(epoch / BAR_DURATION_SECONDS) * BAR_DURATION_SECONDS;
+
+        if (state.currentBarStart === null) {
+          state.currentBarStart = barStart;
+          state.currentBarClose = price;
+          return;
+        }
+
+        if (barStart === state.currentBarStart) {
+          state.currentBarClose = price;
+          return;
+        }
+
+        const previousBarStart = state.currentBarStart;
+        const completedBarClose = state.currentBarClose;
+        state.currentBarStart = barStart;
+        state.currentBarClose = price;
+        if (completedBarClose === null) return;
+
+        if (barStart - previousBarStart > BAR_DURATION_SECONDS) {
+          state.prices = [];
+          state.bars = 0;
+          state.previousDpo = null;
+          onMarketSignal?.({
+            price,
+            dpo: 0,
+            bias: "neutral",
+            ready: false,
+            crossover: null,
+          });
+          return;
+        }
+        state.prices.push(completedBarClose);
+        if (state.prices.length > DPO_WARMUP_BARS) state.prices.shift();
+        state.bars += 1;
+        const ready = state.prices.length >= DPO_WARMUP_BARS;
         const dpoSmaEnd = state.prices.length - DPO_SHIFT;
         const dpoSmaStart = dpoSmaEnd - DPO_PERIOD;
         const dpoSma = ready
           ? state.prices.slice(dpoSmaStart, dpoSmaEnd).reduce((sum, value) => sum + value, 0) / DPO_PERIOD
           : null;
-        const dpo = dpoSma === null ? 0 : price - dpoSma;
+        const dpo = dpoSma === null ? 0 : completedBarClose - dpoSma;
         const crossover = ready && state.previousDpo !== null && state.previousDpo <= 0 && dpo > 0
           ? "CALL"
           : ready && state.previousDpo !== null && state.previousDpo >= 0 && dpo < 0
@@ -120,13 +162,14 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
             : null;
         if (ready) state.previousDpo = dpo;
         const bias = dpo > 0 ? "bullish" : dpo < 0 ? "bearish" : "neutral";
+        const completedAt = new Date(previousBarStart * 1000 + BAR_DURATION_SECONDS * 1000);
 
-        if (ready && state.ticks % SCAN_INTERVAL === 0) {
-          appendEntry(`Market scan · ${MARKET_SYMBOL} · looking for opportunities`, "info", quote.DT);
+        if (ready && state.bars % SCAN_INTERVAL === 0) {
+          appendEntry(`Market scan · ${MARKET_SYMBOL} · 1-minute candles`, "info", completedAt);
         }
 
         onMarketSignal?.({
-          price,
+          price: completedBarClose,
           dpo,
           bias,
           ready,
@@ -134,7 +177,11 @@ export function MarketConsole({ onMarketSignal, onFeedStatus }: MarketConsolePro
         });
 
         if (ready && crossover) {
-          appendEntry(`Signal · ${crossover === "CALL" ? "RISE" : "FALL"}`, crossover === "CALL" ? "bullish" : "bearish", quote.DT);
+          appendEntry(
+            `Signal · ${crossover === "CALL" ? "RISE" : "FALL"}`,
+            crossover === "CALL" ? "bullish" : "bearish",
+            completedAt,
+          );
         }
       },
     );
