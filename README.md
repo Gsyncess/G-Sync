@@ -10,33 +10,83 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). On wider screens the app remains in a phone-sized preview; on mobile it fills the screen.
+Fill in the environment variables described below before signing in. Open [http://localhost:3000](http://localhost:3000). On wider screens the app remains in a phone-sized preview; on mobile it fills the screen.
+
+## Environment variables
+
+Copy `.env.example` to `.env.local` for local development. Set the same values in the server's environment when deploying.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase publishable/anon key used by the sign-in client and server-side token verification. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Paid mode | Server-only Supabase service-role key. Required to persist profiles and payments and manage subscription entitlements. Never expose this key in browser code or a `NEXT_PUBLIC_` variable. |
+| `SUBSCRIPTIONS_ENABLED` | No | `false` (default) allows free bot access. Set to `true` to require an active subscription and enable checkout. |
+| `NOWPAYMENTS_API_KEY` | Paid mode | Server-only API key from the NOWPayments account. |
+| `NOWPAYMENTS_IPN_SECRET` | Paid mode | Server-only IPN secret configured in NOWPayments; used to verify payment notifications. |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | Paid mode | Public HTTPS URL of this app ending exactly in `/api/nowpayments/ipn`. |
+| `DERIV_APP_ID` | For Deriv account linking | Deriv application ID used for OAuth and live balance subscriptions. |
+| `DERIV_REDIRECT_URI` | For Deriv account linking | Exact public callback URL registered in Deriv: `https://YOUR_HOST/api/deriv/oauth/callback`. |
+| `CAPACITOR_SERVER_URL` | Android wrapper | Public HTTPS URL loaded by the Capacitor Android app. |
+| `PORT` | Hosting platform | HTTP port. Usually provided by the host; defaults to `3000` locally. |
+
+Supabase URL and anon key are required for authentication. The payment and subscription variables are only needed when paid mode is enabled. Keep all service-role and NOWPayments secrets server-side. Do not commit `.env.local` or production credentials.
 
 ## Supabase setup
 
-Add your project URL and anon key to `.env.local` as `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Run [supabase/schema.sql](supabase/schema.sql) in the Supabase SQL editor to create the profiles and subscription tables, row-level policies, payment records, activation function, and new-user profile trigger. Email/password sign-up, sign-in, and password reset use Supabase Auth.
+1. Create a Supabase project and copy its project URL and anon key into `.env.local` (or your deployment environment).
+2. Open the Supabase **SQL Editor**, run the complete [supabase/schema.sql](supabase/schema.sql), and confirm it finishes successfully. This creates/updates the profiles, bot subscription and NOWPayments transaction tables, row-level policies, and payment activation function. Re-run the schema after pulling changes that update it.
+3. Configure Supabase Auth email/password sign-in and sign-up for your project. For production, set the project's allowed site and redirect URLs to your deployed app.
+4. For paid subscriptions, copy the Supabase **service-role** key into `SUPABASE_SERVICE_ROLE_KEY` on the server only. Never put it in a `NEXT_PUBLIC_` variable.
+
+The app records user profile details in `profiles`; subscription expiry in `bot_subscriptions`; and each NOWPayments order, transaction status, amounts, customer details, and activation time in `nowpayments_payments`. Payment records are linked to the Supabase Auth user. Profile/payment server operations use the service-role key, and the client does not receive it.
 
 ## Bot subscriptions and in-app payments
 
-Set `SUBSCRIPTIONS_ENABLED=false` to keep bot access free. Set it to `true` to require an active 12-hour subscription before trades can be placed. Each subscription costs $5 and is paid in USDT on TRC20. Users receive the payment address and exact amount inside Settings; the app does not redirect to NOWPayments or use its hosted checkout.
+### Free bot access
 
-For paid mode, set the server-only `SUPABASE_SERVICE_ROLE_KEY`, `NOWPAYMENTS_API_KEY`, and `NOWPAYMENTS_IPN_SECRET`, and set `NOWPAYMENTS_IPN_CALLBACK_URL` to the app's public HTTPS URL ending in `/api/nowpayments/ipn`. Never expose these secrets through `NEXT_PUBLIC_` variables. Run the updated `supabase/schema.sql` before enabling subscriptions. Access starts only after the server verifies NOWPayments' signed `finished` notification. Live payment activation requires the callback URL to be publicly reachable.
+Set `SUBSCRIPTIONS_ENABLED=false` (or leave it unset) to allow bot access without checkout. No NOWPayments credentials are needed in this mode.
+
+### Paid bot access
+
+1. Create/configure a NOWPayments account and enable USDT on the TRC20 network.
+2. Copy the NOWPayments API key and configure an IPN secret in NOWPayments. Set them as `NOWPAYMENTS_API_KEY` and `NOWPAYMENTS_IPN_SECRET` in the server environment.
+3. Set `NOWPAYMENTS_IPN_CALLBACK_URL` to your public HTTPS app URL plus `/api/nowpayments/ipn`, for example `https://your-app.example.com/api/nowpayments/ipn`. Configure the matching callback/notification URL in NOWPayments if its account settings require one. The endpoint must be publicly reachable by NOWPayments.
+4. Ensure the updated [Supabase schema](supabase/schema.sql) has been run and set `SUPABASE_SERVICE_ROLE_KEY` on the server.
+5. Set `SUBSCRIPTIONS_ENABLED=true` only after all of the above is configured, then deploy/restart the app.
+
+Each subscription is fixed at **$5 USD for 12 hours** and paid as USDT TRC20. Settings opens an in-app payment screen showing the amount and address returned by NOWPayments; it does not redirect to NOWPayments' hosted checkout. The server attaches the authenticated user's name, email, and a generated order ID to the payment request, then records the transaction in Supabase. Users must send the exact displayed USDT amount themselves from their wallet; the app does not withdraw funds from the wallet. Subscription access is granted only after the backend verifies the NOWPayments IPN signature and receives a `finished` payment status. The Supabase activation function is idempotent and extends an existing subscription.
+
+Test the complete checkout and signed IPN flow with NOWPayments test/sandbox credentials before taking real payments. Without valid credentials, a reachable HTTPS callback, and the schema installed in the target Supabase project, live payment activation cannot work.
 
 ## Realtime and security
 
-After sign-in, the client connects to Socket.IO using the Supabase access token. The Node server validates the token with Supabase, scopes the connection to that user, and returns a realtime ping/pong for connection latency. The socket disconnects on sign-out and reconnects with refreshed sessions. Unauthenticated or mismatched-origin socket handshakes are rejected.
+After sign-in, the client connects to Socket.IO using the latest Supabase access token. Realtime reconnects automatically with backoff and refreshes the auth token for each attempt; signing out closes the socket. The Node server validates the token with Supabase, scopes the connection to that user, and returns a realtime ping/pong for connection latency. Unauthenticated or mismatched-origin socket handshakes are rejected. Network interruptions and provider outages can still interrupt service; no internet connection can be guaranteed to stay online permanently.
 
 Express applies Helmet security headers and a 120-request-per-15-minute limit to `/api` endpoints. The production Content Security Policy permits only the app and configured Supabase project for network requests. `GET /api/health` is intentionally public for Heroku health checks and returns no-store responses.
 
+## Deriv account and trading setup
+
+1. Create a Deriv application and register the exact redirect URI `https://YOUR_HOST/api/deriv/oauth/callback` in its settings.
+2. Set `DERIV_APP_ID` and `DERIV_REDIRECT_URI` in the server environment. The redirect URI must use the same public host serving the app and HTTPS in production.
+3. Deploy/restart the app, sign in, and use **Connect** to authorize a Deriv account. OAuth tokens are held in HttpOnly cookies and are not exposed to browser JavaScript.
+4. Select a demo account first to test the bot and its risk limits before choosing a real account.
+
+The market console reads public Deriv Volatility 100 (`R_100`) quotes. The bot calculates DPO(14) from each unique incoming tick (not minute candles) and evaluates zero-line crossovers for Rise (`CALL`) and Fall (`PUT`). It requires a warm-up series before trading. Signals are not guarantees of profit; users control the stake and session risk limits in Configure.
+
 ## Heroku deployment
 
-Heroku supplies `PORT` automatically. Set the Supabase variables and Deriv OAuth settings in the app config. The Deriv callback URL must exactly match the one registered in your Deriv application:
+Heroku supplies `PORT` automatically. In Heroku **Settings → Config Vars**, set the variables from the Environment variables section. Example for the common settings (replace all placeholders; never paste secrets into source control):
 
 ```bash
-heroku config:set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_ANON_KEY=... DERIV_APP_ID=... DERIV_REDIRECT_URI=https://your-app.herokuapp.com/api/deriv/oauth/callback
+heroku config:set \
+  NEXT_PUBLIC_SUPABASE_URL="https://YOUR_PROJECT.supabase.co" \
+  NEXT_PUBLIC_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY" \
+  DERIV_APP_ID="YOUR_DERIV_APP_ID" \
+  DERIV_REDIRECT_URI="https://YOUR_APP.herokuapp.com/api/deriv/oauth/callback"
 ```
 
-The app runs from the custom Node server on `PORT`; configure both Supabase variables in Heroku for authentication and authenticated realtime connections.
+For paid subscriptions, also configure `SUPABASE_SERVICE_ROLE_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `NOWPAYMENTS_IPN_CALLBACK_URL`, and `SUBSCRIPTIONS_ENABLED=true`. Keep the flag false until the database schema and payment callback have been tested. The app runs from the custom Node server on `PORT`.
 
 ## Android app with Capacitor
 
@@ -57,4 +107,4 @@ Build an APK or Android App Bundle from Android Studio. After changing the deplo
 
 ## Trading dashboard
 
-After Supabase sign-in, the home dashboard opens a full-width market console that streams public Volatility 100 tick data from Deriv's [public WebSocket API](https://developers.deriv.com/llms/ws-public.md). The console is read-only and does not place trades or require an app ID or account authorization. To link a Deriv account, set `DERIV_APP_ID` and `DERIV_REDIRECT_URI` as described above and register that exact callback URL in your Deriv app settings. The dashboard's **Connect** button redirects the user through Deriv's [OAuth 2.0 Authorization Code + PKCE flow](https://developers.deriv.com/llms/oauth.md), then handles the callback and exchanges the one-time authorization code on the server. The Deriv access token is kept in an HttpOnly cookie and is never exposed to browser JavaScript. Once connected, the dashboard header shows the selected account balance and a dropdown to switch between available demo and real accounts; a server-side Deriv WebSocket subscription updates the selected balance whenever it changes, with periodic refresh as a fallback.
+Once connected, the dashboard header shows the selected account balance and a dropdown to switch between eligible demo and real accounts. A server-side Deriv WebSocket subscription updates the selected balance, with periodic refresh as a fallback.
