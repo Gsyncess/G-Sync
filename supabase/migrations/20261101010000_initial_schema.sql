@@ -1,3 +1,10 @@
+create sequence if not exists public.gsync_account_code_seq
+  start with 6839387474588
+  increment by 1
+  minvalue 1000000000000
+  maxvalue 9999999999999
+  no cycle;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   email text,
@@ -8,11 +15,19 @@ create table if not exists public.profiles (
 );
 
 alter table public.profiles
+  add column if not exists account_id text,
   add column if not exists email text,
   add column if not exists username text,
   add column if not exists display_name text,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
+
+alter table public.profiles
+  alter column account_id set default 'G-' || nextval('public.gsync_account_code_seq')::text;
+
+update public.profiles
+  set account_id = 'G-' || nextval('public.gsync_account_code_seq')::text
+  where account_id is null;
 
 alter table public.profiles enable row level security;
 
